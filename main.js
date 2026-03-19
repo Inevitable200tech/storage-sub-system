@@ -783,7 +783,7 @@ app.get('/api/buckets/:bucket_name/files', async (req, res) => {
     }
 });
 
-const PORT = process.env.SUB_PORT || 3001;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`\n🔧 Sub-Instance [${NODE_ID}] listening on port ${PORT}`);
     console.log(`📊 Dashboard: http://localhost:${PORT}`);
