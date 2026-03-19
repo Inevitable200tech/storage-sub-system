@@ -783,6 +783,10 @@ app.get('/api/buckets/:bucket_name/files', async (req, res) => {
     }
 });
 
+app.get('/health', (req, res) => { 
+    res.json({ status: 'ok', node_id: NODE_ID, uptime: process.uptime() });
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`\n🔧 Sub-Instance [${NODE_ID}] listening on port ${PORT}`);
