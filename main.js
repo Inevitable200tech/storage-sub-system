@@ -771,6 +771,11 @@ app.post('/api/upload', async (req, res) => {
         const hash = req.body.hash || hashFile(file.data);
         const filename = file.name;
 
+        console.log(`[R2-UPLOAD] 📤 Uploading file to sub-instance`);
+        console.log(`[R2-UPLOAD]    Hash: ${hash}`);
+        console.log(`[R2-UPLOAD]    Filename: ${filename}`);
+        console.log(`[R2-UPLOAD]    Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+
         if (file.size > MAX_FILE_SIZE) {
             return res.status(413).json({ error: `File too large` });
         }
@@ -779,10 +784,35 @@ app.post('/api/upload', async (req, res) => {
         if (existing) return res.status(409).json({ error: 'File already exists' });
 
         const bucket = await getAvailableBucket();
+        if (!bucket) return res.status(507).json({ error: 'No available buckets' });
+
         const freeSpace = bucket.max_storage - bucket.storage_used;
         if (file.size > freeSpace) return res.status(507).json({ error: `Insufficient space` });
 
         const objectKey = `${NODE_ID}/${hash}`;
+
+        // ============ UPLOAD TO R2 - CRITICAL STEP ============
+        console.log(`[R2-UPLOAD] 🚀 Uploading to R2 bucket: ${bucket.bucket_name}`);
+        
+        try {
+            const r2Client = await getR2Client(bucket.bucket_name);
+            if (!r2Client) throw new Error('Failed to initialize R2 client');
+
+            // Upload file buffer to R2
+            await r2Client.send(new PutObjectCommand({
+                Bucket: bucket.bucket_name,
+                Key: objectKey,
+                Body: file.data,
+                ContentType: 'application/octet-stream'
+            }));
+
+            console.log(`[R2-UPLOAD] ✅ Successfully uploaded to R2`);
+        } catch (r2Error) {
+            console.error(`[R2-UPLOAD] ❌ R2 upload failed: ${r2Error.message}`);
+            throw new Error(`Failed to upload to R2: ${r2Error.message}`);
+        }
+
+        // ============ SAVE METADATA TO MONGODB ============
         const newFile = new FileInventory({
             hash, filename, size: file.size,
             bucket_name: bucket.bucket_name,
@@ -795,11 +825,22 @@ app.post('/api/upload', async (req, res) => {
             $inc: { storage_used: file.size, file_count: 1 }
         });
 
+        console.log(`[R2-UPLOAD] ✅ File saved to MongoDB inventory`);
+        console.log(`[R2-UPLOAD]    Bucket: ${bucket.bucket_name}`);
+        console.log(`[R2-UPLOAD]    Key: ${objectKey}`);
+
         res.status(201).json({
-            success: true, node_id: NODE_ID, hash, filename, size: file.size,
-            bucket: bucket.bucket_name, key: objectKey
+            success: true, 
+            node_id: NODE_ID, 
+            hash, 
+            filename, 
+            size: file.size,
+            bucket: bucket.bucket_name, 
+            key: objectKey, 
+            status: 'stored_in_r2'
         });
     } catch (err) {
+        console.error(`[R2-UPLOAD] ❌ Error: ${err.message}`);
         res.status(500).json({ error: err.message });
     }
 });
