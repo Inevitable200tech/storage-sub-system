@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const crypto = require('crypto');
 const fileUpload = require('express-fileupload');
 const jwt = require('jsonwebtoken');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 require('dotenv').config({ path: "cert.env" });
 
 const app = express();
@@ -50,6 +51,76 @@ const fileInventorySchema = new mongoose.Schema({
 
 const Bucket = mongoose.model('Bucket', bucketSchema);
 const FileInventory = mongoose.model('FileInventory', fileInventorySchema);
+
+// ============ R2 CLIENT MANAGEMENT ============
+
+const r2Clients = new Map(); // Map of bucket_name -> S3Client
+
+async function getR2Client(bucketName) {
+    try {
+        // Return cached client if exists
+        if (r2Clients.has(bucketName)) {
+            return r2Clients.get(bucketName);
+        }
+
+        // Get bucket credentials from database
+        const bucket = await Bucket.findOne({ bucket_name: bucketName });
+        if (!bucket) {
+            console.error(`[R2] ❌ Bucket ${bucketName} not found in database`);
+            return null;
+        }
+
+        // Create new R2 client
+        const client = new S3Client({
+            region: 'auto',
+            endpoint: bucket.endpoint,
+            credentials: {
+                accessKeyId: bucket.access_key_id,
+                secretAccessKey: bucket.secret_access_key
+            }
+        });
+
+        // Cache the client
+        r2Clients.set(bucketName, client);
+        console.log(`[R2] ✅ R2 client initialized for ${bucketName}`);
+
+        return client;
+    } catch (err) {
+        console.error(`[R2] ❌ Failed to initialize R2 client: ${err.message}`);
+        return null;
+    }
+}
+
+// ============ FILE STREAMING FROM R2 ============
+
+async function getFileFromR2(bucketName, objectKey) {
+    try {
+        console.log(`[R2-DOWNLOAD] 📥 Fetching file from R2`);
+        console.log(`[R2-DOWNLOAD]    Bucket: ${bucketName}`);
+        console.log(`[R2-DOWNLOAD]    Key: ${objectKey}`);
+
+        const client = await getR2Client(bucketName);
+        if (!client) {
+            throw new Error('R2 client not initialized');
+        }
+
+        const command = new GetObjectCommand({
+            Bucket: bucketName,
+            Key: objectKey
+        });
+
+        const response = await client.send(command);
+        const fileBuffer = await response.Body.transformToByteArray();
+
+        console.log(`[R2-DOWNLOAD] ✅ Downloaded successfully`);
+        console.log(`[R2-DOWNLOAD]    Size: ${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB`);
+
+        return Buffer.from(fileBuffer);
+    } catch (err) {
+        console.error(`[R2-DOWNLOAD] ❌ Download failed: ${err.message}`);
+        throw err;
+    }
+}
 
 // ============ AUTH MIDDLEWARE ============
 
@@ -641,6 +712,10 @@ app.post('/api/buckets', verifyToken, async (req, res) => {
         });
 
         await newBucket.save();
+        
+        // Clear R2 client cache to reinitialize with new bucket
+        r2Clients.clear();
+        
         res.status(201).json({ success: true, bucket: newBucket });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -656,6 +731,10 @@ app.delete('/api/buckets/:bucket_name', verifyToken, async (req, res) => {
         if (bucket.file_count > 0) return res.status(409).json({ error: 'Cannot delete bucket with files' });
 
         await Bucket.deleteOne({ bucket_name });
+        
+        // Clear R2 client cache
+        r2Clients.delete(bucket_name);
+        
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -725,6 +804,50 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
+// ============ FILE DOWNLOAD/STREAMING - NEW ENDPOINT ============
+
+app.get('/api/download/:hash', async (req, res) => {
+    try {
+        const { hash } = req.params;
+        const { expires, signature } = req.query;
+
+        console.log(`[DOWNLOAD] 📥 Download request for hash: ${hash}`);
+
+        // Find file in inventory
+        const file = await FileInventory.findOne({ hash, status: 'active' });
+        if (!file) {
+            console.error(`[DOWNLOAD] ❌ File not found: ${hash}`);
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        console.log(`[DOWNLOAD] ✅ File found in bucket: ${file.bucket_name}`);
+        console.log(`[DOWNLOAD]    Object Key: ${file.object_key}`);
+
+        // Fetch file from R2
+        try {
+            const fileBuffer = await getFileFromR2(file.bucket_name, file.object_key);
+
+            // Set response headers
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+            res.setHeader('Content-Length', fileBuffer.length);
+
+            console.log(`[DOWNLOAD] ✅ Streaming file: ${file.filename} (${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+            // Send file
+            res.send(fileBuffer);
+        } catch (err) {
+            console.error(`[DOWNLOAD] ❌ Failed to fetch from R2: ${err.message}`);
+            return res.status(500).json({ error: 'Failed to fetch file from R2' });
+        }
+    } catch (err) {
+        console.error(`[DOWNLOAD] ❌ Error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============ SIGNED URL ENDPOINT ============
+
 app.get('/api/signed-url', async (req, res) => {
     try {
         const { hash } = req.query;
@@ -733,9 +856,11 @@ app.get('/api/signed-url', async (req, res) => {
         const file = await FileInventory.findOne({ hash, status: 'active' });
         if (!file) return res.status(404).json({ error: 'File not found' });
 
-        const expiresAt = Date.now() + 90000;
+        const expiresAt = Date.now() + 1500000; // 25 minutes
         const signature = crypto.createHmac('sha256', 'secret-key')
             .update(`${hash}${expiresAt}`).digest('hex');
+
+        console.log(`[SIGNED-URL] 🔗 Generated signed URL for ${hash}`);
 
         res.json({
             success: true,
@@ -781,10 +906,6 @@ app.get('/api/buckets/:bucket_name/files', async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
-});
-
-app.get('/health', (req, res) => { 
-    res.json({ status: 'ok', node_id: NODE_ID, uptime: process.uptime() });
 });
 
 const PORT = process.env.PORT || 3001;
