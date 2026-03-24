@@ -921,6 +921,22 @@ app.post('/api/delete', verifyToken, async (req, res) => {
         const file = await FileInventory.findOne({ hash });
         if (!file) return res.status(404).json({ error: 'File not found' });
 
+        // Delete from R2
+        try {
+            const r2Client = await getR2Client(file.bucket_name);
+            if (r2Client) {
+                await r2Client.send(new DeleteObjectCommand({
+                    Bucket: file.bucket_name,
+                    Key: file.object_key
+                }));
+                console.log(`[DELETE] ✅ Deleted from R2: ${file.object_key}`);
+            }
+        } catch (r2Error) {
+            console.error(`[DELETE] ❌ Failed to delete from R2: ${r2Error.message}`);
+            return res.status(500).json({ error: `Failed to delete from R2: ${r2Error.message}` });
+        }
+
+        // Update bucket stats
         const bucket = await Bucket.findOne({ bucket_name: file.bucket_name });
         if (bucket) {
             await Bucket.updateOne({ bucket_name: file.bucket_name }, {
@@ -928,9 +944,13 @@ app.post('/api/delete', verifyToken, async (req, res) => {
             });
         }
 
+        // Mark as deleted in inventory
         await FileInventory.updateOne({ hash }, { status: 'deleted' });
+        
+        console.log(`[DELETE] ✅ File deleted: ${hash}`);
         res.json({ success: true, hash });
     } catch (err) {
+        console.error(`[DELETE] ❌ Error: ${err.message}`);
         res.status(500).json({ error: err.message });
     }
 });
