@@ -5,10 +5,15 @@ const fileUpload = require('express-fileupload');
 const jwt = require('jsonwebtoken');
 const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 require('dotenv').config({ path: "cert.env" });
+const fs = require('fs'); // Add this to the top of your file
 
 const app = express();
 app.use(express.json());
-app.use(fileUpload({ useTempFiles: false }));
+// Change this to true to prevent RAM exhaustion
+app.use(fileUpload({ 
+    useTempFiles: true, 
+    tempFileDir: '/tmp/' 
+}));
 
 mongoose.connect(process.env.SUB_MONGODB_URI);
 
@@ -763,58 +768,95 @@ app.get('/api/space', async (req, res) => {
 
 // ============ FILE OPERATIONS ============
 
+
 app.post('/api/upload', async (req, res) => {
+    let tempFilePath = null;
     try {
-        if (!req.files || !req.files.file) return res.status(400).json({ error: 'No file provided' });
+        if (!req.files || !req.files.file) {
+            return res.status(400).json({ error: 'No file provided' });
+        }
 
         const file = req.files.file;
-        const hash = req.body.hash || hashFile(file.data);
-        const filename = file.name;
-
-        console.log(`[R2-UPLOAD] 📤 Uploading file to sub-instance`);
-        console.log(`[R2-UPLOAD]    Hash: ${hash}`);
-        console.log(`[R2-UPLOAD]    Filename: ${filename}`);
-        console.log(`[R2-UPLOAD]    Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
-
+        tempFilePath = file.tempFilePath; // Path to the file on disk
+        
+        // 1. Check File Size Limit
         if (file.size > MAX_FILE_SIZE) {
+            if (tempFilePath) fs.unlinkSync(tempFilePath);
             return res.status(413).json({ error: `File too large` });
         }
 
-        const existing = await FileInventory.findOne({ hash, status: 'active' });
-        if (existing) return res.status(409).json({ error: 'File already exists' });
+        // 2. Handle Hash (Use provided hash or generate from stream to save RAM)
+        const hash = req.body.hash || await new Promise((resolve, reject) => {
+            const hashStream = crypto.createHash('sha256');
+            const rs = fs.createReadStream(tempFilePath);
+            rs.on('error', reject);
+            rs.on('data', chunk => hashStream.update(chunk));
+            rs.on('end', () => resolve(hashStream.digest('hex')));
+        });
 
+        const filename = file.name;
+        const title = req.body.title || filename;
+
+        // 3. CHECK FOR DUPLICATES (409 Logic)
+        const existing = await FileInventory.findOne({ hash, status: 'active' });
+        if (existing) {
+            console.log(`[R2-UPLOAD] 🔁 Duplicate detected: ${hash}`);
+            if (tempFilePath) fs.unlinkSync(tempFilePath); // Clean up temp file
+            
+            // Return 409 with existing metadata so Main Instance can mark as complete
+            return res.status(409).json({ 
+                error: 'File already exists',
+                hash: existing.hash,
+                bucket: existing.bucket_name,
+                key: existing.object_key
+            });
+        }
+
+        // 4. Find Storage Space
         const bucket = await getAvailableBucket();
-        if (!bucket) return res.status(507).json({ error: 'No available buckets' });
+        if (!bucket) {
+            if (tempFilePath) fs.unlinkSync(tempFilePath);
+            return res.status(507).json({ error: 'No available buckets' });
+        }
 
         const freeSpace = bucket.max_storage - bucket.storage_used;
-        if (file.size > freeSpace) return res.status(507).json({ error: `Insufficient space` });
+        if (file.size > freeSpace) {
+            if (tempFilePath) fs.unlinkSync(tempFilePath);
+            return res.status(507).json({ error: `Insufficient space` });
+        }
 
         const objectKey = `${NODE_ID}/${hash}`;
 
-        // ============ UPLOAD TO R2 - CRITICAL STEP ============
-        console.log(`[R2-UPLOAD] 🚀 Uploading to R2 bucket: ${bucket.bucket_name}`);
+        // 5. STREAM UPLOAD TO R2 (CRITICAL: Zero RAM usage)
+        console.log(`[R2-UPLOAD] 🚀 Streaming to R2: ${bucket.bucket_name}`);
         
         try {
             const r2Client = await getR2Client(bucket.bucket_name);
             if (!r2Client) throw new Error('Failed to initialize R2 client');
 
-            // Upload file buffer to R2
+            const fileStream = fs.createReadStream(tempFilePath);
+
             await r2Client.send(new PutObjectCommand({
                 Bucket: bucket.bucket_name,
                 Key: objectKey,
-                Body: file.data,
-                ContentType: 'application/octet-stream'
+                Body: fileStream, // Passing the stream instead of a buffer
+                ContentType: 'application/octet-stream',
+                Metadata: {
+                    'original-filename': filename
+                }
             }));
 
-            console.log(`[R2-UPLOAD] ✅ Successfully uploaded to R2`);
+            console.log(`[R2-UPLOAD] ✅ Stream upload successful`);
         } catch (r2Error) {
-            console.error(`[R2-UPLOAD] ❌ R2 upload failed: ${r2Error.message}`);
-            throw new Error(`Failed to upload to R2: ${r2Error.message}`);
+            if (tempFilePath) fs.unlinkSync(tempFilePath);
+            throw new Error(`R2 upload failed: ${r2Error.message}`);
         }
 
-        // ============ SAVE METADATA TO MONGODB ============
+        // 6. SAVE METADATA
         const newFile = new FileInventory({
-            hash, filename, size: file.size,
+            hash, 
+            filename, 
+            size: file.size,
             bucket_name: bucket.bucket_name,
             object_key: objectKey,
             status: 'active'
@@ -825,21 +867,20 @@ app.post('/api/upload', async (req, res) => {
             $inc: { storage_used: file.size, file_count: 1 }
         });
 
-        console.log(`[R2-UPLOAD] ✅ File saved to MongoDB inventory`);
-        console.log(`[R2-UPLOAD]    Bucket: ${bucket.bucket_name}`);
-        console.log(`[R2-UPLOAD]    Key: ${objectKey}`);
+        // 7. CLEANUP & RESPOND
+        if (tempFilePath) fs.unlinkSync(tempFilePath);
 
         res.status(201).json({
             success: true, 
             node_id: NODE_ID, 
             hash, 
-            filename, 
-            size: file.size,
             bucket: bucket.bucket_name, 
             key: objectKey, 
             status: 'stored_in_r2'
         });
+
     } catch (err) {
+        if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         console.error(`[R2-UPLOAD] ❌ Error: ${err.message}`);
         res.status(500).json({ error: err.message });
     }
@@ -852,38 +893,66 @@ app.get('/api/download/:hash', async (req, res) => {
         const { hash } = req.params;
         const { expires, signature } = req.query;
 
-        console.log(`[DOWNLOAD] 📥 Download request for hash: ${hash}`);
+        // 1. SIGNATURE VALIDATION (Security)
+        if (!expires || !signature) {
+            return res.status(403).json({ error: 'Missing security signature' });
+        }
 
-        // Find file in inventory
+        if (Date.now() > parseInt(expires)) {
+            return res.status(403).json({ error: 'Download link has expired' });
+        }
+
+        // Re-calculate hash to verify the signature (using your JWT_SECRET or a custom ADMIN_KEY)
+        const expectedSignature = crypto.createHmac('sha256', JWT_SECRET)
+            .update(`${hash}${expires}`)
+            .digest('hex');
+
+        if (signature !== expectedSignature) {
+            return res.status(403).json({ error: 'Invalid security signature' });
+        }
+
+        // 2. FIND FILE
         const file = await FileInventory.findOne({ hash, status: 'active' });
         if (!file) {
-            console.error(`[DOWNLOAD] ❌ File not found: ${hash}`);
             return res.status(404).json({ error: 'File not found' });
         }
 
-        console.log(`[DOWNLOAD] ✅ File found in bucket: ${file.bucket_name}`);
-        console.log(`[DOWNLOAD]    Object Key: ${file.object_key}`);
-
-        // Fetch file from R2
-        try {
-            const fileBuffer = await getFileFromR2(file.bucket_name, file.object_key);
-
-            // Set response headers
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
-            res.setHeader('Content-Length', fileBuffer.length);
-
-            console.log(`[DOWNLOAD] ✅ Streaming file: ${file.filename} (${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
-
-            // Send file
-            res.send(fileBuffer);
-        } catch (err) {
-            console.error(`[DOWNLOAD] ❌ Failed to fetch from R2: ${err.message}`);
-            return res.status(500).json({ error: 'Failed to fetch file from R2' });
+        // 3. INITIALIZE R2 CLIENT
+        const r2Client = await getR2Client(file.bucket_name);
+        if (!r2Client) {
+            return res.status(500).json({ error: 'Storage node configuration error' });
         }
+
+        // 4. STREAM FROM R2 DIRECTLY TO RESPONSE (Memory Safe)
+        const command = new GetObjectCommand({
+            Bucket: file.bucket_name,
+            Key: file.object_key
+        });
+
+        const r2Response = await r2Client.send(command);
+
+        // Set standard headers
+        res.setHeader('Content-Type', 'video/mp4'); // Or 'application/octet-stream'
+        res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`);
+        res.setHeader('Content-Length', file.size);
+        res.setHeader('Accept-Ranges', 'bytes'); // Crucial for video seeking/scrubbing
+
+        console.log(`[DOWNLOAD] 🚀 Streaming ${file.filename} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+
+        // Pipe the R2 stream directly to the Express 'res' object
+        // This prevents the file from ever being fully loaded into your server's RAM
+        r2Response.Body.pipe(res);
+
+        // Cleanup: Handle connection drops
+        res.on('close', () => {
+            if (r2Response.Body.destroy) r2Response.Body.destroy();
+        });
+
     } catch (err) {
-        console.error(`[DOWNLOAD] ❌ Error: ${err.message}`);
-        res.status(500).json({ error: err.message });
+        console.error(`[DOWNLOAD] ❌ Critical Error: ${err.message}`);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Internal server error during download' });
+        }
     }
 });
 
