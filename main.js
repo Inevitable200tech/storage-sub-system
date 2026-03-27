@@ -769,122 +769,65 @@ app.get('/api/space', async (req, res) => {
 // ============ FILE OPERATIONS ============
 
 
-app.post('/api/upload', async (req, res) => {
-    let tempFilePath = null;
+import { request, FormData as UndiciFormData } from 'undici';
+import fs from 'fs';
+
+async function uploadFileToSubInstance(subInstance, filePath, fileName, fileHash, title) {
+    if (!subInstance || !subInstance.url) return null;
+
     try {
-        if (!req.files || !req.files.file) {
-            return res.status(400).json({ error: 'No file provided' });
-        }
-
-        const file = req.files.file;
-        tempFilePath = file.tempFilePath; // Path to the file on disk
+        const url = `${subInstance.url.replace(/\/$/, '')}/api/upload`;
         
-        // 1. Check File Size Limit
-        if (file.size > MAX_FILE_SIZE) {
-            if (tempFilePath) fs.unlinkSync(tempFilePath);
-            return res.status(413).json({ error: `File too large` });
+        // 1. Create a disk-backed Blob (Node 19.8+)
+        // This is memory-efficient as it doesn't load the whole file into RAM at once
+        let fileBlob;
+        if (typeof fs.openAsBlob === 'function') {
+            fileBlob = await fs.openAsBlob(filePath);
+        } else {
+            // Fallback for Node 18.x
+            const buffer = fs.readFileSync(filePath);
+            fileBlob = new Blob([buffer]);
         }
 
-        // 2. Handle Hash (Use provided hash or generate from stream to save RAM)
-        const hash = req.body.hash || await new Promise((resolve, reject) => {
-            const hashStream = crypto.createHash('sha256');
-            const rs = fs.createReadStream(tempFilePath);
-            rs.on('error', reject);
-            rs.on('data', chunk => hashStream.update(chunk));
-            rs.on('end', () => resolve(hashStream.digest('hex')));
-        });
+        console.log(`[UPLOAD-NODE] 📤 Streaming to ${subInstance.node_id} (${(fileBlob.size / 1024 / 1024).toFixed(2)} MB)`);
 
-        const filename = file.name;
-        const title = req.body.title || filename;
-
-        // 3. CHECK FOR DUPLICATES (409 Logic)
-        const existing = await FileInventory.findOne({ hash, status: 'active' });
-        if (existing) {
-            console.log(`[R2-UPLOAD] 🔁 Duplicate detected: ${hash}`);
-            if (tempFilePath) fs.unlinkSync(tempFilePath); // Clean up temp file
-            
-            // Return 409 with existing metadata so Main Instance can mark as complete
-            return res.status(409).json({ 
-                error: 'File already exists',
-                hash: existing.hash,
-                bucket: existing.bucket_name,
-                key: existing.object_key
-            });
-        }
-
-        // 4. Find Storage Space
-        const bucket = await getAvailableBucket();
-        if (!bucket) {
-            if (tempFilePath) fs.unlinkSync(tempFilePath);
-            return res.status(507).json({ error: 'No available buckets' });
-        }
-
-        const freeSpace = bucket.max_storage - bucket.storage_used;
-        if (file.size > freeSpace) {
-            if (tempFilePath) fs.unlinkSync(tempFilePath);
-            return res.status(507).json({ error: `Insufficient space` });
-        }
-
-        const objectKey = `${NODE_ID}/${hash}`;
-
-        // 5. STREAM UPLOAD TO R2 (CRITICAL: Zero RAM usage)
-        console.log(`[R2-UPLOAD] 🚀 Streaming to R2: ${bucket.bucket_name}`);
+        const fd = new UndiciFormData();
         
-        try {
-            const r2Client = await getR2Client(bucket.bucket_name);
-            if (!r2Client) throw new Error('Failed to initialize R2 client');
+        // 2. Append the Blob. 
+        // Providing the 3rd argument (fileName) is CRITICAL for express-fileupload
+        fd.append('file', fileBlob, fileName);
+        fd.append('hash', fileHash);
+        fd.append('title', title || fileName);
 
-            const fileStream = fs.createReadStream(tempFilePath);
+        console.log(`[UPLOAD-NODE] ⏳ Dispatching to sub-instance...`);
 
-            await r2Client.send(new PutObjectCommand({
-                Bucket: bucket.bucket_name,
-                Key: objectKey,
-                Body: fileStream, // Passing the stream instead of a buffer
-                ContentType: 'application/octet-stream',
-                Metadata: {
-                    'original-filename': filename
-                }
-            }));
+        const { statusCode, body } = await request(url, {
+            method: 'POST',
+            body: fd,
+            headersTimeout: 600000, 
+            bodyTimeout: 600000
+        });
 
-            console.log(`[R2-UPLOAD] ✅ Stream upload successful`);
-        } catch (r2Error) {
-            if (tempFilePath) fs.unlinkSync(tempFilePath);
-            throw new Error(`R2 upload failed: ${r2Error.message}`);
+        const result = await body.json();
+
+        if (statusCode >= 200 && statusCode < 300) {
+            console.log(`[UPLOAD-NODE] ✅ Upload successful to ${subInstance.node_id}`);
+            return result;
         }
 
-        // 6. SAVE METADATA
-        const newFile = new FileInventory({
-            hash, 
-            filename, 
-            size: file.size,
-            bucket_name: bucket.bucket_name,
-            object_key: objectKey,
-            status: 'active'
-        });
+        if (statusCode === 409) {
+            console.log(`[UPLOAD-NODE] ⚠️ Duplicate on node.`);
+            return { isDuplicate: true, ...result };
+        }
 
-        await newFile.save();
-        await Bucket.updateOne({ bucket_name: bucket.bucket_name }, {
-            $inc: { storage_used: file.size, file_count: 1 }
-        });
-
-        // 7. CLEANUP & RESPOND
-        if (tempFilePath) fs.unlinkSync(tempFilePath);
-
-        res.status(201).json({
-            success: true, 
-            node_id: NODE_ID, 
-            hash, 
-            bucket: bucket.bucket_name, 
-            key: objectKey, 
-            status: 'stored_in_r2'
-        });
+        console.error(`[UPLOAD-NODE] ❌ Node rejected: ${JSON.stringify(result)}`);
+        return null;
 
     } catch (err) {
-        if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-        console.error(`[R2-UPLOAD] ❌ Error: ${err.message}`);
-        res.status(500).json({ error: err.message });
+        console.error(`[UPLOAD-NODE] ❌ Upload failed: ${err.message}`);
+        return null;
     }
-});
+}
 
 // ============ FILE DOWNLOAD/STREAMING - NEW ENDPOINT ============
 
