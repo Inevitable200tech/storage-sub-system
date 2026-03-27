@@ -769,7 +769,122 @@ app.get('/api/space', async (req, res) => {
 // ============ FILE OPERATIONS ============
 
 
+app.post('/api/upload', async (req, res) => {
+    let tempFilePath = null;
+    try {
+        if (!req.files || !req.files.file) {
+            return res.status(400).json({ error: 'No file provided' });
+        }
 
+        const file = req.files.file;
+        tempFilePath = file.tempFilePath; // Path to the file on disk
+        
+        // 1. Check File Size Limit
+        if (file.size > MAX_FILE_SIZE) {
+            if (tempFilePath) fs.unlinkSync(tempFilePath);
+            return res.status(413).json({ error: `File too large` });
+        }
+
+        // 2. Handle Hash (Use provided hash or generate from stream to save RAM)
+        const hash = req.body.hash || await new Promise((resolve, reject) => {
+            const hashStream = crypto.createHash('sha256');
+            const rs = fs.createReadStream(tempFilePath);
+            rs.on('error', reject);
+            rs.on('data', chunk => hashStream.update(chunk));
+            rs.on('end', () => resolve(hashStream.digest('hex')));
+        });
+
+        const filename = file.name;
+        const title = req.body.title || filename;
+
+        // 3. CHECK FOR DUPLICATES (409 Logic)
+        const existing = await FileInventory.findOne({ hash, status: 'active' });
+        if (existing) {
+            console.log(`[R2-UPLOAD] 🔁 Duplicate detected: ${hash}`);
+            if (tempFilePath) fs.unlinkSync(tempFilePath); // Clean up temp file
+            
+            // Return 409 with existing metadata so Main Instance can mark as complete
+            return res.status(409).json({ 
+                error: 'File already exists',
+                hash: existing.hash,
+                bucket: existing.bucket_name,
+                key: existing.object_key
+            });
+        }
+
+        // 4. Find Storage Space
+        const bucket = await getAvailableBucket();
+        if (!bucket) {
+            if (tempFilePath) fs.unlinkSync(tempFilePath);
+            return res.status(507).json({ error: 'No available buckets' });
+        }
+
+        const freeSpace = bucket.max_storage - bucket.storage_used;
+        if (file.size > freeSpace) {
+            if (tempFilePath) fs.unlinkSync(tempFilePath);
+            return res.status(507).json({ error: `Insufficient space` });
+        }
+
+        const objectKey = `${NODE_ID}/${hash}`;
+
+        // 5. STREAM UPLOAD TO R2 (CRITICAL: Zero RAM usage)
+        console.log(`[R2-UPLOAD] 🚀 Streaming to R2: ${bucket.bucket_name}`);
+        
+        try {
+            const r2Client = await getR2Client(bucket.bucket_name);
+            if (!r2Client) throw new Error('Failed to initialize R2 client');
+
+            const fileStream = fs.createReadStream(tempFilePath);
+
+            await r2Client.send(new PutObjectCommand({
+                Bucket: bucket.bucket_name,
+                Key: objectKey,
+                Body: fileStream, // Passing the stream instead of a buffer
+                ContentType: 'application/octet-stream',
+                Metadata: {
+                    'original-filename': filename
+                }
+            }));
+
+            console.log(`[R2-UPLOAD] ✅ Stream upload successful`);
+        } catch (r2Error) {
+            if (tempFilePath) fs.unlinkSync(tempFilePath);
+            throw new Error(`R2 upload failed: ${r2Error.message}`);
+        }
+
+        // 6. SAVE METADATA
+        const newFile = new FileInventory({
+            hash, 
+            filename, 
+            size: file.size,
+            bucket_name: bucket.bucket_name,
+            object_key: objectKey,
+            status: 'active'
+        });
+
+        await newFile.save();
+        await Bucket.updateOne({ bucket_name: bucket.bucket_name }, {
+            $inc: { storage_used: file.size, file_count: 1 }
+        });
+
+        // 7. CLEANUP & RESPOND
+        if (tempFilePath) fs.unlinkSync(tempFilePath);
+
+        res.status(201).json({
+            success: true, 
+            node_id: NODE_ID, 
+            hash, 
+            bucket: bucket.bucket_name, 
+            key: objectKey, 
+            status: 'stored_in_r2'
+        });
+
+    } catch (err) {
+        if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+        console.error(`[R2-UPLOAD] ❌ Error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // ============ FILE DOWNLOAD/STREAMING - NEW ENDPOINT ============
 
