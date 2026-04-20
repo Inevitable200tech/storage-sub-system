@@ -57,6 +57,8 @@ async function processVideoThumbnail(tempVideoPath, fileHash) {
             Body: thumbBuffer,
             ContentType: 'image/jpeg'
         }));
+
+        console.log(`[Thumbnail] ✅ Uploaded to ${thumbBucket.bucket_name}/${objectKey}`);
         
         // 4. Update Database
         await FileInventory.findOneAndUpdate(

@@ -253,9 +253,10 @@
                             // Note: For thumbnails, we'd ideally need a signed URL. 
                             // For now, we'll just show a placeholder or the hash.
                             const hasThumb = !!f.thumbnail_key;
+                            const thumbUrl = hasThumb ? `/api/files/thumbnail/${f.hash}` : '';
                             return `
                                 <tr>
-                                    <td>${hasThumb ? '<div class="thumb-preview" style="background: #3498db; color: white; display: flex; align-items: center; justify-content: center; font-size: 10px;">JPG</div>' : '<div class="thumb-preview"></div>'}</td>
+                                    <td>${hasThumb ? `<img src="${thumbUrl}" class="thumb-preview">` : '<div class="thumb-preview"></div>'}</td>
                                     <td>${f.filename}<br><small style="color: #999">${f.hash.substring(0, 16)}...</small></td>
                                     <td>${formatBytes(f.size)}</td>
                                     <td>${new Date(f.uploadedAt).toLocaleDateString()}</td>

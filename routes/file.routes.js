@@ -263,4 +263,32 @@ router.post('/delete', verifyToken, async (req, res) => {
     }
 });
 
+router.get('/thumbnail/:hash', async (req, res) => {
+    try {
+        const { hash } = req.params;
+        const file = await FileInventory.findOne({ hash, status: 'active' });
+        
+        if (!file || !file.thumbnail_key || !file.thumbnail_bucket) {
+            return res.status(404).json({ error: 'Thumbnail not found' });
+        }
+
+        const r2Client = await getR2Client(file.thumbnail_bucket);
+        if (!r2Client) return res.status(500).json({ error: 'Storage node configuration error' });
+
+        const command = new GetObjectCommand({
+            Bucket: file.thumbnail_bucket,
+            Key: file.thumbnail_key
+        });
+
+        const r2Response = await r2Client.send(command);
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24h
+        r2Response.Body.pipe(res);
+
+    } catch (err) {
+        console.error(`[THUMB-SERVE] ❌ Error: ${err.message}`);
+        res.status(500).json({ error: 'Failed to serve thumbnail' });
+    }
+});
+
 module.exports = router;
