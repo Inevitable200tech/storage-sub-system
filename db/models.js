@@ -24,6 +24,7 @@ const fileInventorySchema = new mongoose.Schema({
     object_key: String,
     thumbnail_bucket: String,
     thumbnail_key: String,
+    thumbnail_address: String,
     status: { type: String, enum: ['active', 'deleted'], default: 'active' },
     uploadedAt: { type: Date, default: Date.now }
 });

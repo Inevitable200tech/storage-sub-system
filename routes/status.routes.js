@@ -109,12 +109,20 @@ router.post('/api/admin/fix-thumbnail-addresses', verifyToken, async (req, res) 
             ]
         });
 
+        const batchSize = 1000;
         let updated = 0;
-        for (const file of files) {
-            // Even if the thumbnail hasn't been generated yet, we can set the expected address
-            file.thumbnail_address = `/api/thumbnail/${file.hash}`;
-            await file.save();
-            updated++;
+        
+        for (let i = 0; i < files.length; i += batchSize) {
+            const batch = files.slice(i, i + batchSize);
+            const ops = batch.map(file => ({
+                updateOne: {
+                    filter: { _id: file._id },
+                    update: { $set: { thumbnail_address: `/api/thumbnail/${file.hash}` } }
+                }
+            }));
+            
+            await FileInventory.bulkWrite(ops);
+            updated += batch.length;
         }
 
         res.json({ success: true, message: `Updated ${updated} file addresses` });
