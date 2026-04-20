@@ -7,6 +7,7 @@ const { NODE_ID } = require('../config');
 const { getTotalStats } = require('../services/storage');
 const { FileInventory } = require('../db/models');
 const { getR2Client } = require('../services/r2');
+const { verifyToken } = require('../middleware/auth');
 const mediaService = require('../services/media');
 
 // ============ STATUS ENDPOINTS ============
