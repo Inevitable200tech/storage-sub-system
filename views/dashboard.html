@@ -103,7 +103,7 @@
                 <form onsubmit="addBucket(event)">
                     <div class="form-row three">
                         <div class="form-group"><label>Bucket Name</label><input type="text" id="bucket-name" placeholder="my-bucket" required></div>
-                        <div class="form-group"><label>Account ID</label><input type="text" id="account-id" placeholder="Cloudflare Account ID" required></div>
+                        <div class="form-group"><label>Endpoint</label><input type="text" id="bucket-endpoint" placeholder="https://s3.us-east-1.idrivee2-2.com"></div>
                         <div class="form-group">
                             <label>Type</label>
                             <select id="bucket-type">
@@ -112,9 +112,10 @@
                             </select>
                         </div>
                     </div>
-                    <div class="form-row">
+                    <div class="form-row three">
                         <div class="form-group"><label>Access Key</label><input type="text" id="access-key-id" required></div>
                         <div class="form-group"><label>Secret Key</label><input type="password" id="secret-access-key" required></div>
+                        <div class="form-group"><label>Region</label><input type="text" id="bucket-region" placeholder="auto"></div>
                     </div>
                     <button type="submit">Add Bucket</button>
                 </form>
@@ -274,10 +275,11 @@
             e.preventDefault();
             const data = {
                 bucket_name: document.getElementById('bucket-name').value,
-                account_id: document.getElementById('account-id').value,
+                endpoint: document.getElementById('bucket-endpoint').value,
                 access_key_id: document.getElementById('access-key-id').value,
                 secret_access_key: document.getElementById('secret-access-key').value,
-                type: document.getElementById('bucket-type').value
+                type: document.getElementById('bucket-type').value,
+                region: document.getElementById('bucket-region').value
             };
             try {
                 const res = await apiCall('/api/buckets', { method: 'POST', body: JSON.stringify(data) });

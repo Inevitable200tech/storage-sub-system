@@ -8,6 +8,7 @@ const bucketSchema = new mongoose.Schema({
     access_key_id: String,
     secret_access_key: String,
     endpoint: String,
+    region: { type: String, default: 'auto' },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
     storage_used: { type: Number, default: 0 },
     file_count: { type: Number, default: 0 },

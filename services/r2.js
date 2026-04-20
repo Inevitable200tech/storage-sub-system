@@ -17,9 +17,9 @@ async function getR2Client(bucketName) {
             return null;
         }
 
-        // Create new R2 client
+        // Create new S3 client
         const client = new S3Client({
-            region: 'auto',
+            region: bucket.region || 'auto',
             endpoint: bucket.endpoint,
             credentials: {
                 accessKeyId: bucket.access_key_id,
