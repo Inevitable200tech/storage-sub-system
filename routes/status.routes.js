@@ -98,4 +98,29 @@ router.post('/api/admin/reprocess-thumbnails', verifyToken, async (req, res) => 
     }
 });
 
+router.post('/api/admin/fix-thumbnail-addresses', verifyToken, async (req, res) => {
+    try {
+        const files = await FileInventory.find({
+            status: 'active',
+            $or: [
+                { thumbnail_address: { $exists: false } },
+                { thumbnail_address: null },
+                { thumbnail_address: '' }
+            ]
+        });
+
+        let updated = 0;
+        for (const file of files) {
+            // Even if the thumbnail hasn't been generated yet, we can set the expected address
+            file.thumbnail_address = `/api/thumbnail/${file.hash}`;
+            await file.save();
+            updated++;
+        }
+
+        res.json({ success: true, message: `Updated ${updated} file addresses` });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;

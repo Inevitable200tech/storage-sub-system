@@ -296,4 +296,13 @@ router.get('/thumbnail/:hash', async (req, res) => {
     }
 });
 
+router.get('/admin/files', verifyToken, async (req, res) => {
+    try {
+        const files = await FileInventory.find({ status: 'active' });
+        res.json({ success: true, files });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;
