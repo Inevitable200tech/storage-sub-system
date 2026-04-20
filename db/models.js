@@ -3,6 +3,7 @@ const { MAX_BUCKET_SIZE } = require('../config');
 
 const bucketSchema = new mongoose.Schema({
     bucket_name: { type: String, required: true, unique: true },
+    type: { type: String, enum: ['video', 'thumbnail'], default: 'video' },
     account_id: String,
     access_key_id: String,
     secret_access_key: String,
@@ -20,6 +21,8 @@ const fileInventorySchema = new mongoose.Schema({
     size: Number,
     bucket_name: String,
     object_key: String,
+    thumbnail_bucket: String,
+    thumbnail_key: String,
     status: { type: String, enum: ['active', 'deleted'], default: 'active' },
     uploadedAt: { type: Date, default: Date.now }
 });

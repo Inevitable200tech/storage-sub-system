@@ -18,7 +18,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', verifyToken, async (req, res) => {
     try {
-        const { bucket_name, account_id, access_key_id, secret_access_key, endpoint } = req.body;
+        const { bucket_name, account_id, access_key_id, secret_access_key, endpoint, type } = req.body;
 
         if (!bucket_name || !account_id || !access_key_id || !secret_access_key) {
             return res.status(400).json({ error: 'Missing required fields' });
@@ -37,6 +37,7 @@ router.post('/', verifyToken, async (req, res) => {
             account_id,
             access_key_id,
             secret_access_key,
+            type: type || 'video',
             endpoint: endpoint || `https://${account_id}.r2.cloudflarestorage.com`,
             status: 'active'
         });
@@ -78,7 +79,14 @@ router.get('/:bucket_name/files', async (req, res) => {
 
         res.json({
             success: true, bucket_name, total_files: files.length,
-            files: files.map(f => ({ hash: f.hash, filename: f.filename, size: f.size, uploadedAt: f.uploadedAt }))
+            files: files.map(f => ({ 
+                hash: f.hash, 
+                filename: f.filename, 
+                size: f.size, 
+                uploadedAt: f.uploadedAt,
+                thumbnail_bucket: f.thumbnail_bucket,
+                thumbnail_key: f.thumbnail_key
+            }))
         });
     } catch (err) {
         res.status(500).json({ error: err.message });

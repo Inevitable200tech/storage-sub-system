@@ -8,6 +8,8 @@ const { verifyToken } = require('../middleware/auth');
 const { NODE_ID, MAX_FILE_SIZE, JWT_SECRET } = require('../config');
 const { getR2Client } = require('../services/r2');
 const { getAvailableBucket } = require('../services/storage');
+const mediaService = require('../services/media');
+
 
 // ============ FILE OPERATIONS ============
 
@@ -108,8 +110,30 @@ router.post('/upload', async (req, res) => {
             $inc: { storage_used: file.size, file_count: 1 }
         });
 
-        // 7. CLEANUP & RESPOND
-        if (tempFilePath) fs.unlinkSync(tempFilePath);
+        // 7. THUMBNAIL GENERATION (Async so it doesn't block response)
+        // Note: In a production environment, this should be a background worker job
+        const isVideo = file.mimetype && file.mimetype.startsWith('video/');
+        if (isVideo) {
+            console.log(`[THUMBNAIL] 🖼️ Generating for ${hash}...`);
+            mediaService.processVideoThumbnail(tempFilePath, hash).catch(err => {
+                console.error(`[THUMBNAIL] ❌ Error: ${err.message}`);
+            });
+        }
+
+        // 8. CLEANUP & RESPOND
+        // Wait briefly for thumbnail generation if it's quick, or just use a copy if async
+        // For simplicity, we'll keep the temp file until thumbnail generation starts/finishes
+        // Better: extractThumbnail needs the file.
+        
+        // Wait for it? If we want to be sure. But the user wants upcoming videos.
+        // Let's wait to ensure the file is available for the spawn process.
+        
+        setTimeout(() => {
+            if (tempFilePath && fs.existsSync(tempFilePath)) {
+                fs.unlinkSync(tempFilePath);
+                console.log(`[R2-UPLOAD] 🗑️ Cleaned up temp file`);
+            }
+        }, 5000); // 5s buffer for FFmpeg to start/finish
 
         res.status(201).json({
             success: true, 

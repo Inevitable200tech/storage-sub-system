@@ -5,9 +5,9 @@ function hashFile(data) {
     return crypto.createHash('sha256').update(data).digest('hex');
 }
 
-async function getAvailableBucket() {
-    const buckets = await Bucket.find({ status: 'active' });
-    if (buckets.length === 0) throw new Error('No active buckets');
+async function getAvailableBucket(type = 'video') {
+    const buckets = await Bucket.find({ status: 'active', type });
+    if (buckets.length === 0) throw new Error(`No active buckets of type ${type}`);
 
     let bestBucket = null;
     let maxFreeSpace = -1;
