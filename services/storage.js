@@ -32,7 +32,7 @@ async function getAvailableBucket(type = 'video') {
 
 async function getTotalStats() {
     const buckets = await Bucket.find();
-    const files = await FileInventory.find({ status: 'active' });
+    const totalFiles = await FileInventory.countDocuments({ status: 'active' });
     
     let totalUsed = 0;
     let totalMax = 0;
@@ -58,7 +58,7 @@ async function getTotalStats() {
         total_storage_used: totalUsed,
         total_max_storage: totalMax,
         total_free_space: totalMax - totalUsed,
-        total_files: files.length,
+        total_files: totalFiles,
         percentage_used: ((totalUsed / totalMax) * 100).toFixed(2),
         buckets: bucketStats
     };

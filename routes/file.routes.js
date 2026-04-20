@@ -2,7 +2,12 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const crypto = require('crypto');
+const { pipeline } = require('stream');
 const { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+
+// Simple metadata cache to reduce DB overhead
+const fileCache = new Map();
+const CACHE_TTL = 60 * 1000; // 1 minute
 const { Bucket, FileInventory } = require('../db/models');
 const { verifyToken } = require('../middleware/auth');
 const { NODE_ID, MAX_FILE_SIZE, JWT_SECRET } = require('../config');
@@ -156,14 +161,14 @@ router.post('/upload', async (req, res) => {
     }
 });
 
-// ============ FILE DOWNLOAD/STREAMING - NEW ENDPOINT ============
+// ============ FILE DOWNLOAD/STREAMING - OPTIMIZED ============
 
 router.get('/download/:hash', async (req, res) => {
     try {
         const { hash } = req.params;
         const { expires, signature } = req.query;
 
-        // 1. SIGNATURE VALIDATION (Security)
+        // 1. SIGNATURE VALIDATION
         if (!expires || !signature) {
             return res.status(403).json({ error: 'Missing security signature' });
         }
@@ -172,7 +177,6 @@ router.get('/download/:hash', async (req, res) => {
             return res.status(403).json({ error: 'Download link has expired' });
         }
 
-        // Re-calculate hash to verify the signature (using your JWT_SECRET or a custom ADMIN_KEY)
         const expectedSignature = crypto.createHmac('sha256', JWT_SECRET)
             .update(`${hash}${expires}`)
             .digest('hex');
@@ -181,41 +185,99 @@ router.get('/download/:hash', async (req, res) => {
             return res.status(403).json({ error: 'Invalid security signature' });
         }
 
-        // 2. FIND FILE
-        const file = await FileInventory.findOne({ hash, status: 'active' });
-        if (!file) {
-            return res.status(404).json({ error: 'File not found' });
+        // 2. FIND FILE (With Cache)
+        let file = fileCache.get(hash);
+        if (!file || (Date.now() - file.cachedAt > CACHE_TTL)) {
+            file = await FileInventory.findOne({ hash, status: 'active' });
+            if (!file) {
+                return res.status(404).json({ error: 'File not found' });
+            }
+            file = file.toObject(); // Convert to plain object
+            file.cachedAt = Date.now();
+            fileCache.set(hash, file);
         }
 
-        // 3. INITIALIZE R2 CLIENT
+        // 3. HANDLE RANGE HEADERS (CRITICAL for Video Performance)
+        const range = req.headers.range;
+        const totalSize = file.size;
+        let start = 0;
+        let end = totalSize - 1;
+        let isPartial = false;
+
+        if (range) {
+            const parts = range.replace(/bytes=/, "").split("-");
+            start = parseInt(parts[0], 10);
+            end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+            
+            // Validate range
+            if (start >= totalSize || end >= totalSize || start > end) {
+                res.setHeader('Content-Range', `bytes */${totalSize}`);
+                return res.status(416).json({ error: 'Requested range not satisfiable' });
+            }
+            isPartial = true;
+        }
+
+        const chunkSize = (end - start) + 1;
+
+        // 4. PREPARE R2 COMMAND
         const r2Client = await getR2Client(file.bucket_name);
         if (!r2Client) {
             return res.status(500).json({ error: 'Storage node configuration error' });
         }
 
-        // 4. STREAM FROM R2 DIRECTLY TO RESPONSE (Memory Safe)
-        const command = new GetObjectCommand({
+        const commandOptions = {
             Bucket: file.bucket_name,
             Key: file.object_key
-        });
+        };
 
+        if (isPartial) {
+            commandOptions.Range = `bytes=${start}-${end}`;
+        }
+
+        const command = new GetObjectCommand(commandOptions);
         const r2Response = await r2Client.send(command);
 
-        // Set standard headers
-        res.setHeader('Content-Type', 'video/mp4'); // Or 'application/octet-stream'
+        // 5. SET OPTIMIZED HEADERS
+        const ext = file.filename.split('.').pop().toLowerCase();
+        const mimeMap = {
+            'mp4': 'video/mp4',
+            'mkv': 'video/x-matroska',
+            'webm': 'video/webm',
+            'avi': 'video/x-msvideo',
+            'mov': 'video/quicktime',
+            'mp3': 'audio/mpeg',
+            'wav': 'audio/wav'
+        };
+        const contentType = mimeMap[ext] || 'application/octet-stream';
+
+        res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`);
-        res.setHeader('Content-Length', file.size);
-        res.setHeader('Accept-Ranges', 'bytes'); // Crucial for video seeking/scrubbing
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Length', chunkSize);
+        res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
 
-        console.log(`[DOWNLOAD] 🚀 Streaming ${file.filename} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+        if (isPartial) {
+            res.status(206);
+            res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+        }
 
-        // Pipe the R2 stream directly to the Express 'res' object
-        // This prevents the file from ever being fully loaded into your server's RAM
-        r2Response.Body.pipe(res);
+        // 6. STREAM DIRECTLY
+        // Only log full requests or the first range request to avoid log flooding
+        if (!isPartial || start === 0) {
+            console.log(`[DOWNLOAD] 🚀 Streaming ${file.filename} (${(chunkSize / 1024 / 1024).toFixed(2)} MB)`);
+        }
+        
+        pipeline(r2Response.Body, res, (err) => {
+            if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+                console.error(`[DOWNLOAD-PIPE] ❌ Error: ${err.message}`);
+            }
+        });
 
-        // Cleanup: Handle connection drops
+        // Ensure R2 stream is closed if client disconnects early
         res.on('close', () => {
-            if (r2Response.Body.destroy) r2Response.Body.destroy();
+            if (r2Response.Body && r2Response.Body.destroy) {
+                r2Response.Body.destroy();
+            }
         });
 
     } catch (err) {
@@ -260,6 +322,9 @@ router.post('/delete', verifyToken, async (req, res) => {
         // Mark as deleted in inventory
         await FileInventory.updateOne({ hash }, { status: 'deleted' });
         
+        // Invalidate cache
+        fileCache.delete(hash);
+        
         console.log(`[DELETE] ✅ File deleted: ${hash}`);
         res.json({ success: true, hash });
     } catch (err) {
@@ -271,9 +336,18 @@ router.post('/delete', verifyToken, async (req, res) => {
 router.get('/thumbnail/:hash', async (req, res) => {
     try {
         const { hash } = req.params;
-        const file = await FileInventory.findOne({ hash, status: 'active' });
         
-        if (!file || !file.thumbnail_key || !file.thumbnail_bucket) {
+        // Use Cache for thumbnail metadata too
+        let file = fileCache.get(hash);
+        if (!file || (Date.now() - file.cachedAt > CACHE_TTL)) {
+            file = await FileInventory.findOne({ hash, status: 'active' });
+            if (!file) return res.status(404).json({ error: 'File not found' });
+            file = file.toObject();
+            file.cachedAt = Date.now();
+            fileCache.set(hash, file);
+        }
+        
+        if (!file.thumbnail_key || !file.thumbnail_bucket) {
             return res.status(404).json({ error: 'Thumbnail not found' });
         }
 
@@ -286,13 +360,24 @@ router.get('/thumbnail/:hash', async (req, res) => {
         });
 
         const r2Response = await r2Client.send(command);
+        
         res.setHeader('Content-Type', 'image/jpeg');
         res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24h
-        r2Response.Body.pipe(res);
+        if (r2Response.ContentLength) {
+            res.setHeader('Content-Length', r2Response.ContentLength);
+        }
+        
+        pipeline(r2Response.Body, res, (err) => {
+            if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+                console.error(`[THUMB-PIPE] ❌ Error: ${err.message}`);
+            }
+        });
 
     } catch (err) {
         console.error(`[THUMB-SERVE] ❌ Error: ${err.message}`);
-        res.status(500).json({ error: 'Failed to serve thumbnail' });
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to serve thumbnail' });
+        }
     }
 });
 
