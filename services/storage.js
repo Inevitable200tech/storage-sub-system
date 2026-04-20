@@ -6,7 +6,14 @@ function hashFile(data) {
 }
 
 async function getAvailableBucket(type = 'video') {
-    const buckets = await Bucket.find({ status: 'active', type });
+    const query = { status: 'active' };
+    if (type === 'video') {
+        query.$or = [{ type: 'video' }, { type: { $exists: false } }];
+    } else {
+        query.type = type;
+    }
+
+    const buckets = await Bucket.find(query);
     if (buckets.length === 0) throw new Error(`No active buckets of type ${type}`);
 
     let bestBucket = null;
@@ -37,6 +44,7 @@ async function getTotalStats() {
         
         bucketStats.push({
             bucket_name: bucket.bucket_name,
+            type: bucket.type || 'video',
             storage_used: bucket.storage_used,
             max_storage: bucket.max_storage,
             free_space: bucket.max_storage - bucket.storage_used,
