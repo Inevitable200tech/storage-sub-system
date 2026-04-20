@@ -13,7 +13,7 @@ const { FileInventory, Bucket } = require('../db/models');
 async function extractThumbnail(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
         const ffmpeg = spawn(ffmpegPath, [
-            '-error_detect', 'ignore_err',
+            '-err_detect', 'ignore_err',
             '-i', inputPath,
             '-ss', '00:00:01',
             '-vframes', '1',
