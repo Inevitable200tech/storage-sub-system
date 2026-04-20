@@ -20,8 +20,8 @@ router.post('/', verifyToken, async (req, res) => {
     try {
         const { bucket_name, account_id, access_key_id, secret_access_key, endpoint, type, region } = req.body;
 
-        if (!bucket_name || !account_id || !access_key_id || !secret_access_key) {
-            return res.status(400).json({ error: 'Missing required fields' });
+        if (!bucket_name || (!account_id && !endpoint) || !access_key_id || !secret_access_key) {
+            return res.status(400).json({ error: 'Missing required fields (bucket_name, access_key, secret_key, and either account_id or endpoint)' });
         }
 
         const bucketCount = await Bucket.countDocuments();
@@ -39,7 +39,7 @@ router.post('/', verifyToken, async (req, res) => {
             secret_access_key,
             type: type || 'video',
             region: region || 'auto',
-            endpoint: endpoint || (account_id.includes('r2') ? `https://${account_id}.r2.cloudflarestorage.com` : endpoint),
+            endpoint: endpoint || (account_id && account_id.includes('r2') ? `https://${account_id}.r2.cloudflarestorage.com` : endpoint),
             status: 'active'
         });
 
