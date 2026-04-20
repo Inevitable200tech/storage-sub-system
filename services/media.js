@@ -14,13 +14,11 @@ async function extractThumbnail(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
         const ffmpeg = spawn(ffmpegPath, [
             '-err_detect', 'ignore_err',
-            '-sws_flags', 'fast_bilinear',
-            '-color_range', '1', // Force limited color range detection
             '-i', inputPath,
             '-ss', '00:00:01',
             '-vframes', '1',
             '-q:v', '2',
-            '-vf', 'scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2',
+            '-s', '480x270',
             '-y', // Overwrite
             outputPath
         ]);
