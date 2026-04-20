@@ -18,9 +18,7 @@ async function extractThumbnail(inputPath, outputPath) {
             '-ss', '00:00:01',
             '-vframes', '1',
             '-q:v', '2',
-            '-s', '480x270',
-            '-pix_fmt', 'yuvj420p',
-            '-f', 'image2',
+            '-vf', 'scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
             '-y', // Overwrite
             outputPath
         ]);
