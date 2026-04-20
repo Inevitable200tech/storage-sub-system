@@ -306,9 +306,9 @@
         }
 
         async function reprocessThumbnails() {
-            if (!confirm('Start batch thumbnail generation for existing files? (100 files at a time)')) return;
+            if (!confirm('Start batch thumbnail generation for existing files? (400 files at a time)')) return;
             try {
-                const res = await apiCall('/api/admin/reprocess-thumbnails', { method: 'POST', body: JSON.stringify({ limit: 100 }) });
+                const res = await apiCall('/api/admin/reprocess-thumbnails', { method: 'POST', body: JSON.stringify({ limit: 700 }) });
                 const d = await res.json();
                 alert(`Processed ${d.processed} files. Check console for details.`);
                 console.log(d);
