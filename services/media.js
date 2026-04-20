@@ -47,7 +47,7 @@ async function processVideoThumbnail(tempVideoPath, fileHash) {
         await extractThumbnail(tempVideoPath, tempThumbPath);
         
         // 3. Upload to R2
-        const r2 = getR2Client(thumbBucket);
+        const r2 = await getR2Client(thumbBucket.bucket_name);
         const objectKey = `thumbnails/${fileHash}.jpg`;
         const thumbBuffer = fs.readFileSync(tempThumbPath);
         
