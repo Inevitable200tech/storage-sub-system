@@ -42,7 +42,11 @@ router.post('/api/admin/reprocess-thumbnails', verifyToken, async (req, res) => 
         
         const query = { status: 'active' };
         if (!force) {
-            query.thumbnail_key = { $exists: false };
+            query.$or = [
+                { thumbnail_key: { $exists: false } },
+                { thumbnail_key: null },
+                { thumbnail_key: '' }
+            ];
         }
 
         const files = await FileInventory.find(query).limit(limit);
