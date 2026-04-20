@@ -110,14 +110,17 @@ router.post('/upload', async (req, res) => {
             $inc: { storage_used: file.size, file_count: 1 }
         });
 
-        // 7. THUMBNAIL GENERATION (Async so it doesn't block response)
-        // Note: In a production environment, this should be a background worker job
-        const isVideo = file.mimetype && file.mimetype.startsWith('video/');
+        // 7. THUMBNAIL GENERATION (Async)
+        const isVideo = (file.mimetype && file.mimetype.startsWith('video/')) || 
+                        (file.name && file.name.match(/\.(mp4|mkv|webm|avi|mov)$/i));
+        
         if (isVideo) {
-            console.log(`[THUMBNAIL] 🖼️ Generating for ${hash}...`);
+            console.log(`[THUMBNAIL] 🖼️ Detected video: ${file.name} (${file.mimetype}). Generating...`);
             mediaService.processVideoThumbnail(tempFilePath, hash).catch(err => {
                 console.error(`[THUMBNAIL] ❌ Error: ${err.message}`);
             });
+        } else {
+            console.log(`[THUMBNAIL] ⏭️ Skipping non-video file: ${file.name} (${file.mimetype})`);
         }
 
         // 8. CLEANUP & RESPOND

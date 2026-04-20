@@ -64,7 +64,10 @@
                 <h1>🔧 Dashboard</h1>
                 <p id="node-info">Node: Loading...</p>
             </div>
-            <div style="display: flex; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <label style="color: white; font-size: 12px; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" id="force-reprocess"> Force
+                </label>
                 <button class="secondary" onclick="reprocessThumbnails()">📸 Reprocess Thumbnails</button>
                 <button class="logout-btn" onclick="logout()">🚪 Logout</button>
             </div>
@@ -306,9 +309,14 @@
         }
 
         async function reprocessThumbnails() {
-            if (!confirm('Start batch thumbnail generation for existing files? (400 files at a time)')) return;
+            const force = document.getElementById('force-reprocess').checked;
+            const msg = force ? 'Force re-generate thumbnails for 700 files?' : 'Start batch thumbnail generation for existing files? (400 files at a time)';
+            if (!confirm(msg)) return;
             try {
-                const res = await apiCall('/api/admin/reprocess-thumbnails', { method: 'POST', body: JSON.stringify({ limit: 700 }) });
+                const res = await apiCall('/api/admin/reprocess-thumbnails', { 
+                    method: 'POST', 
+                    body: JSON.stringify({ limit: 700, force }) 
+                });
                 const d = await res.json();
                 alert(`Processed ${d.processed} files. Check console for details.`);
                 console.log(d);

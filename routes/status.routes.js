@@ -38,13 +38,14 @@ router.get('/health', (req, res) => {
 
 router.post('/api/admin/reprocess-thumbnails', verifyToken, async (req, res) => {
     try {
-        const { limit = 700 } = req.body; // Process in larger batches
+        const { limit = 700, force = false } = req.body; 
         
-        // Find files that don't have a thumbnail yet
-        const files = await FileInventory.find({
-            status: 'active',
-            thumbnail_key: { $exists: false }
-        }).limit(limit);
+        const query = { status: 'active' };
+        if (!force) {
+            query.thumbnail_key = { $exists: false };
+        }
+
+        const files = await FileInventory.find(query).limit(limit);
 
         if (files.length === 0) {
             return res.json({ success: true, message: 'No files need processing' });
