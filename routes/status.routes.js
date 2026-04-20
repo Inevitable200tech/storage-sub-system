@@ -5,7 +5,7 @@ const { getTotalStats } = require('../services/storage');
 
 // ============ STATUS ENDPOINTS ============
 
-router.get('/status', async (req, res) => {
+router.get('/api/status', async (req, res) => {
     try {
         const stats = await getTotalStats();
         res.json({ success: true, node_id: NODE_ID, stats });
@@ -14,7 +14,7 @@ router.get('/status', async (req, res) => {
     }
 });
 
-router.get('/space', async (req, res) => {
+router.get('/api/space', async (req, res) => {
     try {
         const stats = await getTotalStats();
         res.json({ success: true, node_id: NODE_ID, ...stats });
