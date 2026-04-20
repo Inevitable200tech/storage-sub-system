@@ -86,7 +86,8 @@ router.get('/:bucket_name/files', async (req, res) => {
                 size: f.size, 
                 uploadedAt: f.uploadedAt,
                 thumbnail_bucket: f.thumbnail_bucket,
-                thumbnail_key: f.thumbnail_key
+                thumbnail_key: f.thumbnail_key,
+                thumbnail_address: f.thumbnail_address || `/api/thumbnail/${f.hash}`
             }))
         });
     } catch (err) {

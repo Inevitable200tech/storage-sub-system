@@ -102,6 +102,7 @@ router.post('/upload', async (req, res) => {
             size: file.size,
             bucket_name: bucket.bucket_name,
             object_key: objectKey,
+            thumbnail_address: `/api/thumbnail/${hash}`,
             status: 'active'
         });
 
@@ -144,6 +145,7 @@ router.post('/upload', async (req, res) => {
             hash, 
             bucket: bucket.bucket_name, 
             key: objectKey, 
+            thumbnail_address: `/api/thumbnail/${hash}`,
             status: 'stored_in_r2'
         });
 
