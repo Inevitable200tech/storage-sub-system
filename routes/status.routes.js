@@ -38,7 +38,7 @@ router.get('/health', (req, res) => {
 
 router.post('/api/admin/reprocess-thumbnails', verifyToken, async (req, res) => {
     try {
-        const { limit = 10 } = req.body; // Process in small batches to avoid timeout
+        const { limit = 100 } = req.body; // Process in larger batches
         
         // Find files that don't have a thumbnail yet
         const files = await FileInventory.find({
