@@ -67,7 +67,7 @@ router.post('/api/admin/reprocess-thumbnails', verifyToken, async (req, res) => 
                 const command = new GetObjectCommand({
                     Bucket: file.bucket_name,
                     Key: file.object_key,
-                    Range: 'bytes=0-5000000' // 5MB should be enough for a frame at 1s
+                    Range: 'bytes=0-10000000' // 10MB for better header detection
                 });
 
                 const response = await r2.send(command);

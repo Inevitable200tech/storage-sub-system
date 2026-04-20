@@ -13,18 +13,28 @@ const { FileInventory, Bucket } = require('../db/models');
 async function extractThumbnail(inputPath, outputPath) {
     return new Promise((resolve, reject) => {
         const ffmpeg = spawn(ffmpegPath, [
+            '-error_detect', 'ignore_err',
             '-i', inputPath,
             '-ss', '00:00:01',
             '-vframes', '1',
             '-q:v', '2',
             '-s', '480x270',
+            '-pix_fmt', 'yuvj420p',
+            '-f', 'image2',
             '-y', // Overwrite
             outputPath
         ]);
 
+        const stderr = [];
+        ffmpeg.stderr.on('data', (data) => stderr.push(data));
+
         ffmpeg.on('close', (code) => {
             if (code === 0) resolve();
-            else reject(new Error(`FFmpeg exited with code ${code}`));
+            else {
+                const errorMsg = Buffer.concat(stderr).toString();
+                console.error(`[FFMPEG-ERROR] Code ${code}: ${errorMsg}`);
+                reject(new Error(`FFmpeg exited with code ${code}`));
+            }
         });
 
         ffmpeg.on('error', (err) => {
