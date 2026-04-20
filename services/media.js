@@ -15,6 +15,7 @@ async function extractThumbnail(inputPath, outputPath) {
         const ffmpeg = spawn(ffmpegPath, [
             '-err_detect', 'ignore_err',
             '-sws_flags', 'fast_bilinear',
+            '-color_range', '1', // Force limited color range detection
             '-i', inputPath,
             '-ss', '00:00:01',
             '-vframes', '1',
