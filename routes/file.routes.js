@@ -4,6 +4,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { pipeline } = require('stream');
 const { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 // Simple metadata cache to reduce DB overhead
 const fileCache = new Map();
@@ -219,7 +220,7 @@ router.get('/download/:hash', async (req, res) => {
 
         const chunkSize = (end - start) + 1;
 
-        // 4. PREPARE R2 COMMAND
+        // 4. PREPARE R2 CLIENT
         const r2Client = await getR2Client(file.bucket_name);
         if (!r2Client) {
             return res.status(500).json({ error: 'Storage node configuration error' });
@@ -230,6 +231,21 @@ router.get('/download/:hash', async (req, res) => {
             Key: file.object_key
         };
 
+        // 5. OPTIMIZATION: DIRECT REDIRECT (Fastest for initial load)
+        // By default, we redirect to a presigned R2 URL. This allows the browser to
+        // connect directly to Cloudflare's edge, which is much faster than proxying.
+        const useProxy = req.query.proxy === 'true';
+
+        if (!useProxy) {
+            console.log(`[DOWNLOAD] 🔀 Redirecting to direct R2 link for speed: ${file.filename}`);
+            const command = new GetObjectCommand(commandOptions);
+            // This generates a presigned URL that the browser can use directly,
+            // including for its own Range requests.
+            const signedUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 }); 
+            return res.redirect(signedUrl);
+        }
+
+        // 6. FALLBACK: PROXIED STREAMING (With Range Support)
         if (isPartial) {
             commandOptions.Range = `bytes=${start}-${end}`;
         }
@@ -237,7 +253,7 @@ router.get('/download/:hash', async (req, res) => {
         const command = new GetObjectCommand(commandOptions);
         const r2Response = await r2Client.send(command);
 
-        // 5. SET OPTIMIZED HEADERS
+        // 7. SET OPTIMIZED HEADERS
         const ext = file.filename.split('.').pop().toLowerCase();
         const mimeMap = {
             'mp4': 'video/mp4',
