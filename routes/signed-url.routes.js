@@ -27,13 +27,13 @@ router.get('/', async (req, res) => {
         }
 
         // 3. Set Expiration (1 hour for playback)
-        const expiresIn = 3600; 
+        const expiresIn = 3600;
         const expiresAt = Date.now() + (expiresIn * 1000);
 
         // 4. Generate DIRECT R2 Signed URL (CRITICAL for speed)
         // This bypasses the /api/download redirect and lets the browser hit R2 directly
         console.log(`[SIGNED-URL] 🚀 Generating direct R2 link for: ${file.filename}`);
-        
+
         const { getR2Client } = require('../services/r2');
         const { GetObjectCommand } = require('@aws-sdk/client-s3');
         const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
@@ -56,7 +56,10 @@ router.get('/', async (req, res) => {
             Key: file.object_key,
             ResponseContentType: contentType,
             ResponseContentDisposition: `inline; filename="${file.filename}"`,
-            ResponseCacheControl: 'public, max-age=3600'
+            // Add Accept-Ranges to tell the browser it can request specific parts
+            ResponseAcceptRanges: 'bytes',
+            // Increase cache control for the actual video data
+            ResponseCacheControl: 'public, max-age=604800, immutable'
         });
 
         const directSignedUrl = await getSignedUrl(r2Client, command, { expiresIn });
