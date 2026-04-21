@@ -231,6 +231,19 @@ router.get('/download/:hash', async (req, res) => {
             Key: file.object_key
         };
 
+        // 7. SET OPTIMIZED HEADERS
+        const ext = file.filename.split('.').pop().toLowerCase();
+        const mimeMap = {
+            'mp4': 'video/mp4',
+            'mkv': 'video/x-matroska',
+            'webm': 'video/webm',
+            'avi': 'video/x-msvideo',
+            'mov': 'video/quicktime',
+            'mp3': 'audio/mpeg',
+            'wav': 'audio/wav'
+        };
+        const contentType = mimeMap[ext] || 'application/octet-stream';
+
         // 5. OPTIMIZATION: DIRECT REDIRECT (Fastest for initial load)
         // By default, we redirect to a presigned R2 URL. This allows the browser to
         // connect directly to Cloudflare's edge, which is much faster than proxying.
@@ -238,7 +251,12 @@ router.get('/download/:hash', async (req, res) => {
 
         if (!useProxy) {
             console.log(`[DOWNLOAD] 🔀 Redirecting to direct R2 link for speed: ${file.filename}`);
-            const command = new GetObjectCommand(commandOptions);
+            const command = new GetObjectCommand({
+                ...commandOptions,
+                ResponseContentType: contentType,
+                ResponseContentDisposition: `inline; filename="${file.filename}"`,
+                ResponseCacheControl: 'public, max-age=3600'
+            });
             // This generates a presigned URL that the browser can use directly,
             // including for its own Range requests.
             const signedUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 });
@@ -254,18 +272,6 @@ router.get('/download/:hash', async (req, res) => {
         const r2Response = await r2Client.send(command);
 
         // 7. SET OPTIMIZED HEADERS
-        const ext = file.filename.split('.').pop().toLowerCase();
-        const mimeMap = {
-            'mp4': 'video/mp4',
-            'mkv': 'video/x-matroska',
-            'webm': 'video/webm',
-            'avi': 'video/x-msvideo',
-            'mov': 'video/quicktime',
-            'mp3': 'audio/mpeg',
-            'wav': 'audio/wav'
-        };
-        const contentType = mimeMap[ext] || 'application/octet-stream';
-
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`);
         res.setHeader('Accept-Ranges', 'bytes');

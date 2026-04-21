@@ -39,10 +39,25 @@ router.get('/', async (req, res) => {
         const { GetObjectCommand } = require('@aws-sdk/client-s3');
         const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
+        const ext = file.filename.split('.').pop().toLowerCase();
+        const mimeMap = {
+            'mp4': 'video/mp4',
+            'mkv': 'video/x-matroska',
+            'webm': 'video/webm',
+            'avi': 'video/x-msvideo',
+            'mov': 'video/quicktime',
+            'mp3': 'audio/mpeg',
+            'wav': 'audio/wav'
+        };
+        const contentType = mimeMap[ext] || 'application/octet-stream';
+
         const r2Client = await getR2Client(file.bucket_name);
         const command = new GetObjectCommand({
             Bucket: file.bucket_name,
-            Key: file.object_key
+            Key: file.object_key,
+            ResponseContentType: contentType,
+            ResponseContentDisposition: `inline; filename="${file.filename}"`,
+            ResponseCacheControl: 'public, max-age=3600'
         });
 
         const directSignedUrl = await getSignedUrl(r2Client, command, { expiresIn });
