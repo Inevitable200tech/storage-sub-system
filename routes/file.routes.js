@@ -28,7 +28,7 @@ router.post('/upload', async (req, res) => {
 
         const file = req.files.file;
         tempFilePath = file.tempFilePath; // Path to the file on disk
-        
+
         // 1. Check File Size Limit
         if (file.size > MAX_FILE_SIZE) {
             if (tempFilePath) fs.unlinkSync(tempFilePath);
@@ -51,9 +51,9 @@ router.post('/upload', async (req, res) => {
         if (existing) {
             console.log(`[R2-UPLOAD] 🔁 Duplicate detected: ${hash}`);
             if (tempFilePath) fs.unlinkSync(tempFilePath); // Clean up temp file
-            
+
             // Return 409 with existing metadata so Main Instance can mark as complete
-            return res.status(409).json({ 
+            return res.status(409).json({
                 error: 'File already exists',
                 hash: existing.hash,
                 bucket: existing.bucket_name,
@@ -78,7 +78,7 @@ router.post('/upload', async (req, res) => {
 
         // 5. STREAM UPLOAD TO R2 (CRITICAL: Zero RAM usage)
         console.log(`[R2-UPLOAD] 🚀 Streaming to R2: ${bucket.bucket_name}`);
-        
+
         try {
             const r2Client = await getR2Client(bucket.bucket_name);
             if (!r2Client) throw new Error('Failed to initialize R2 client');
@@ -103,8 +103,8 @@ router.post('/upload', async (req, res) => {
 
         // 6. SAVE METADATA
         const newFile = new FileInventory({
-            hash, 
-            filename, 
+            hash,
+            filename,
             size: file.size,
             bucket_name: bucket.bucket_name,
             object_key: objectKey,
@@ -118,9 +118,9 @@ router.post('/upload', async (req, res) => {
         });
 
         // 7. THUMBNAIL GENERATION (Async)
-        const isVideo = (file.mimetype && file.mimetype.startsWith('video/')) || 
-                        (file.name && file.name.match(/\.(mp4|mkv|webm|avi|mov)$/i));
-        
+        const isVideo = (file.mimetype && file.mimetype.startsWith('video/')) ||
+            (file.name && file.name.match(/\.(mp4|mkv|webm|avi|mov)$/i));
+
         if (isVideo) {
             console.log(`[THUMBNAIL] 🖼️ Detected video: ${file.name} (${file.mimetype}). Generating...`);
             mediaService.processVideoThumbnail(tempFilePath, hash).catch(err => {
@@ -134,10 +134,10 @@ router.post('/upload', async (req, res) => {
         // Wait briefly for thumbnail generation if it's quick, or just use a copy if async
         // For simplicity, we'll keep the temp file until thumbnail generation starts/finishes
         // Better: extractThumbnail needs the file.
-        
+
         // Wait for it? If we want to be sure. But the user wants upcoming videos.
         // Let's wait to ensure the file is available for the spawn process.
-        
+
         setTimeout(() => {
             if (tempFilePath && fs.existsSync(tempFilePath)) {
                 fs.unlinkSync(tempFilePath);
@@ -146,11 +146,11 @@ router.post('/upload', async (req, res) => {
         }, 5000); // 5s buffer for FFmpeg to start/finish
 
         res.status(201).json({
-            success: true, 
-            node_id: NODE_ID, 
-            hash, 
-            bucket: bucket.bucket_name, 
-            key: objectKey, 
+            success: true,
+            node_id: NODE_ID,
+            hash,
+            bucket: bucket.bucket_name,
+            key: objectKey,
             thumbnail_address: `/api/thumbnail/${hash}`,
             status: 'stored_in_r2'
         });
@@ -209,7 +209,7 @@ router.get('/download/:hash', async (req, res) => {
             const parts = range.replace(/bytes=/, "").split("-");
             start = parseInt(parts[0], 10);
             end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
-            
+
             // Validate range
             if (start >= totalSize || end >= totalSize || start > end) {
                 res.setHeader('Content-Range', `bytes */${totalSize}`);
@@ -241,7 +241,7 @@ router.get('/download/:hash', async (req, res) => {
             const command = new GetObjectCommand(commandOptions);
             // This generates a presigned URL that the browser can use directly,
             // including for its own Range requests.
-            const signedUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 }); 
+            const signedUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 });
             return res.redirect(signedUrl);
         }
 
@@ -282,7 +282,7 @@ router.get('/download/:hash', async (req, res) => {
         if (!isPartial || start === 0) {
             console.log(`[DOWNLOAD] 🚀 Streaming ${file.filename} (${(chunkSize / 1024 / 1024).toFixed(2)} MB)`);
         }
-        
+
         pipeline(r2Response.Body, res, (err) => {
             if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
                 console.error(`[DOWNLOAD-PIPE] ❌ Error: ${err.message}`);
@@ -337,10 +337,10 @@ router.post('/delete', verifyToken, async (req, res) => {
 
         // Mark as deleted in inventory
         await FileInventory.updateOne({ hash }, { status: 'deleted' });
-        
+
         // Invalidate cache
         fileCache.delete(hash);
-        
+
         console.log(`[DELETE] ✅ File deleted: ${hash}`);
         res.json({ success: true, hash });
     } catch (err) {
@@ -352,7 +352,7 @@ router.post('/delete', verifyToken, async (req, res) => {
 router.get('/thumbnail/:hash', async (req, res) => {
     try {
         const { hash } = req.params;
-        
+
         // Use Cache for thumbnail metadata too
         let file = fileCache.get(hash);
         if (!file || (Date.now() - file.cachedAt > CACHE_TTL)) {
@@ -362,7 +362,7 @@ router.get('/thumbnail/:hash', async (req, res) => {
             file.cachedAt = Date.now();
             fileCache.set(hash, file);
         }
-        
+
         if (!file.thumbnail_key || !file.thumbnail_bucket) {
             return res.status(404).json({ error: 'Thumbnail not found' });
         }
@@ -376,13 +376,13 @@ router.get('/thumbnail/:hash', async (req, res) => {
         });
 
         const r2Response = await r2Client.send(command);
-        
+
         res.setHeader('Content-Type', 'image/jpeg');
         res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24h
         if (r2Response.ContentLength) {
             res.setHeader('Content-Length', r2Response.ContentLength);
         }
-        
+
         pipeline(r2Response.Body, res, (err) => {
             if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
                 console.error(`[THUMB-PIPE] ❌ Error: ${err.message}`);

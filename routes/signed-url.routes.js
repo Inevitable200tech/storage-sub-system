@@ -27,25 +27,29 @@ router.get('/', async (req, res) => {
             return res.status(404).json({ error: 'File not found on this storage node' });
         }
 
-        // 3. Set Expiration (25 minutes)
-        const expiresAt = Date.now() + (25 * 60 * 1000); 
+        // 3. Set Expiration (1 hour for playback)
+        const expiresIn = 3600; 
+        const expiresAt = Date.now() + (expiresIn * 1000);
 
-        // 4. Generate HMAC Signature
-        // Uses JWT_SECRET to sign the link so the /api/download route can verify it
-        const signature = crypto.createHmac('sha256', JWT_SECRET)
-            .update(`${hash}${expiresAt}`)
-            .digest('hex');
+        // 4. Generate DIRECT R2 Signed URL (CRITICAL for speed)
+        // This bypasses the /api/download redirect and lets the browser hit R2 directly
+        console.log(`[SIGNED-URL] 🚀 Generating direct R2 link for: ${file.filename}`);
+        
+        const { getR2Client } = require('../services/r2');
+        const { GetObjectCommand } = require('@aws-sdk/client-s3');
+        const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
-        // 5. Build full URL
-        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-        const host = req.get('host');
-        const signedUrl = `${protocol}://${host}/api/download/${hash}?expires=${expiresAt}&signature=${signature}`;
+        const r2Client = await getR2Client(file.bucket_name);
+        const command = new GetObjectCommand({
+            Bucket: file.bucket_name,
+            Key: file.object_key
+        });
 
-        console.log(`[SIGNED-URL] 🔗 Link generated for: ${file.filename}`);
+        const directSignedUrl = await getSignedUrl(r2Client, command, { expiresIn });
 
         res.json({
             success: true,
-            signed_url: signedUrl,
+            signed_url: directSignedUrl,
             expires_at: expiresAt,
             filename: file.filename,
             size: file.size
