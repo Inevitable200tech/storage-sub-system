@@ -198,9 +198,27 @@ router.get('/download/:hash', async (req, res) => {
             fileCache.set(hash, file);
         }
 
-        // 3. STREAMING CONFIG
+        // 3. HANDLE RANGE HEADERS (Restored for duration/seeking)
+        const range = req.headers.range;
         const totalSize = file.size;
-        
+        let start = 0;
+        let end = totalSize - 1;
+        let isPartial = false;
+
+        if (range) {
+            const parts = range.replace(/bytes=/, "").split("-");
+            start = parseInt(parts[0], 10);
+            end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+            if (start >= totalSize || end >= totalSize || start > end) {
+                res.setHeader('Content-Range', `bytes */${totalSize}`);
+                return res.status(416).json({ error: 'Requested range not satisfiable' });
+            }
+            isPartial = true;
+        }
+
+        const chunkSize = (end - start) + 1;
+
         // 4. PREPARE R2 CLIENT
         const r2Client = await getR2Client(file.bucket_name);
         if (!r2Client) {
@@ -224,8 +242,8 @@ router.get('/download/:hash', async (req, res) => {
         };
         const contentType = mimeMap[ext] || 'application/octet-stream';
 
-        // 5. DEFAULT: DIRECT REDIRECT (Fastest and most compatible)
-        const useProxy = req.query.proxy === 'true'; 
+        // 5. DEFAULT: PROXIED STREAMING (Now supporting Ranges)
+        const useProxy = req.query.proxy !== 'false'; 
 
         if (!useProxy) {
             console.log(`[DOWNLOAD] 🔀 Redirecting to direct R2 link: ${file.filename}`);
@@ -239,18 +257,28 @@ router.get('/download/:hash', async (req, res) => {
             return res.redirect(signedUrl);
         }
 
-        // 6. PROXIED STREAMING (Full File / HTTP 200)
-        // Partial content removed as requested. We serve the entire file.
+        // 6. PROXIED STREAMING
+        if (isPartial) {
+            commandOptions.Range = `bytes=${start}-${end}`;
+        }
+
         const command = new GetObjectCommand(commandOptions);
         const r2Response = await r2Client.send(command);
 
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`);
-        res.setHeader('Content-Length', totalSize);
-        res.setHeader('Accept-Ranges', 'none');
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Length', chunkSize);
         res.setHeader('Cache-Control', 'public, max-age=3600');
 
-        console.log(`[DOWNLOAD] 🚀 Streaming full file: ${file.filename} (${(totalSize / 1024 / 1024).toFixed(2)} MB)`);
+        if (isPartial) {
+            res.status(206);
+            res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+        }
+
+        if (!isPartial || start === 0) {
+            console.log(`[DOWNLOAD] 🚀 Streaming ${file.filename} (Range: ${start}-${end})`);
+        }
 
         pipeline(r2Response.Body, res, (err) => {
             if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
