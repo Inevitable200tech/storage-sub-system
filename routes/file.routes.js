@@ -198,48 +198,9 @@ router.get('/download/:hash', async (req, res) => {
             fileCache.set(hash, file);
         }
 
-        // 3. HANDLE RANGE HEADERS (CRITICAL for Video Performance)
-        // ============ LARGE CHUNKING STRATEGY ============
-        // We enforce healthy chunk sizes (e.g., 15MB) to increase the 'rate' of delivery
-        // and avoid the performance overhead of many tiny requests.
-        const CHUNK_SIZE = 15 * 1024 * 1024; // 15MB "Large bit of chunks"
-        const range = req.headers.range;
+        // 3. STREAMING CONFIG
         const totalSize = file.size;
         
-        let start = 0;
-        let end = totalSize - 1;
-        let isPartial = false;
-
-        if (range) {
-            const parts = range.replace(/bytes=/, "").split("-");
-            start = parseInt(parts[0], 10);
-            
-            // If browser didn't specify end, or specified a small range,
-            // we force it to be at least our CHUNK_SIZE for better throughput.
-            const requestedEnd = parts[1] ? parseInt(parts[1], 10) : null;
-            
-            if (requestedEnd !== null) {
-                // Even if browser asked for less, we send a larger chunk to keep buffers full
-                end = Math.max(requestedEnd, Math.min(start + CHUNK_SIZE, totalSize - 1));
-            } else {
-                // Open ended request -> send a 15MB chunk
-                end = Math.min(start + CHUNK_SIZE, totalSize - 1);
-            }
-
-            // Validate range
-            if (start >= totalSize || end >= totalSize || start > end) {
-                res.setHeader('Content-Range', `bytes */${totalSize}`);
-                return res.status(416).json({ error: 'Requested range not satisfiable' });
-            }
-            isPartial = true;
-        } else {
-            // Optional: even without range, start with a large chunk to optimize initial load
-            end = Math.min(start + CHUNK_SIZE, totalSize - 1);
-            isPartial = true;
-        }
-
-        const chunkSize = (end - start) + 1;
-
         // 4. PREPARE R2 CLIENT
         const r2Client = await getR2Client(file.bucket_name);
         if (!r2Client) {
@@ -251,7 +212,6 @@ router.get('/download/:hash', async (req, res) => {
             Key: file.object_key
         };
 
-        // 7. SET OPTIMIZED HEADERS
         const ext = file.filename.split('.').pop().toLowerCase();
         const mimeMap = {
             'mp4': 'video/mp4',
@@ -264,53 +224,34 @@ router.get('/download/:hash', async (req, res) => {
         };
         const contentType = mimeMap[ext] || 'application/octet-stream';
 
-        // 5. OPTIMIZATION: PROXIED STREAMING (Controlled Chunking)
-        // We now default to proxying with our large chunk strategy to ensure 
-        // a high delivery rate, bypassing direct redirects which can result 
-        // in inconsistent or small chunks from R2.
-        const useProxy = req.query.proxy !== 'false'; // Default to true now
+        // 5. DEFAULT: DIRECT REDIRECT (Fastest and most compatible)
+        const useProxy = req.query.proxy === 'true'; 
 
         if (!useProxy) {
-            console.log(`[DOWNLOAD] 🔀 Redirecting to direct R2 link for speed: ${file.filename}`);
+            console.log(`[DOWNLOAD] 🔀 Redirecting to direct R2 link: ${file.filename}`);
             const command = new GetObjectCommand({
                 ...commandOptions,
                 ResponseContentType: contentType,
                 ResponseContentDisposition: `inline; filename="${file.filename}"`,
                 ResponseCacheControl: 'public, max-age=3600'
             });
-            // This generates a presigned URL that the browser can use directly,
-            // including for its own Range requests.
             const signedUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 });
             return res.redirect(signedUrl);
         }
 
-        // 6. FALLBACK: PROXIED STREAMING (With Range Support)
-        if (isPartial) {
-            commandOptions.Range = `bytes=${start}-${end}`;
-        }
-
+        // 6. PROXIED STREAMING (Full File / HTTP 200)
+        // Partial content removed as requested. We serve the entire file.
         const command = new GetObjectCommand(commandOptions);
         const r2Response = await r2Client.send(command);
 
-        // 7. SET OPTIMIZED HEADERS
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`);
-        res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Content-Length', chunkSize);
-        res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+        res.setHeader('Content-Length', totalSize);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
 
-        if (isPartial) {
-            res.status(206);
-            res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
-        }
+        console.log(`[DOWNLOAD] 🚀 Streaming full file: ${file.filename} (${(totalSize / 1024 / 1024).toFixed(2)} MB)`);
 
-        // 6. STREAM DIRECTLY
-        // Only log full requests or the first range request to avoid log flooding
-        if (!isPartial || start === 0) {
-            console.log(`[DOWNLOAD] 🚀 Streaming ${file.filename} (${(chunkSize / 1024 / 1024).toFixed(2)} MB)`);
-        }
-
-        pipeline(r2Response.Body, res, { highWaterMark: 1024 * 1024 }, (err) => {
+        pipeline(r2Response.Body, res, (err) => {
             if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
                 console.error(`[DOWNLOAD-PIPE] ❌ Error: ${err.message}`);
             }
