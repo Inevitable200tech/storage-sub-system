@@ -199,8 +199,13 @@ router.get('/download/:hash', async (req, res) => {
         }
 
         // 3. HANDLE RANGE HEADERS (CRITICAL for Video Performance)
+        // ============ LARGE CHUNKING STRATEGY ============
+        // We enforce healthy chunk sizes (e.g., 15MB) to increase the 'rate' of delivery
+        // and avoid the performance overhead of many tiny requests.
+        const CHUNK_SIZE = 15 * 1024 * 1024; // 15MB "Large bit of chunks"
         const range = req.headers.range;
         const totalSize = file.size;
+        
         let start = 0;
         let end = totalSize - 1;
         let isPartial = false;
@@ -208,13 +213,28 @@ router.get('/download/:hash', async (req, res) => {
         if (range) {
             const parts = range.replace(/bytes=/, "").split("-");
             start = parseInt(parts[0], 10);
-            end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+            
+            // If browser didn't specify end, or specified a small range,
+            // we force it to be at least our CHUNK_SIZE for better throughput.
+            const requestedEnd = parts[1] ? parseInt(parts[1], 10) : null;
+            
+            if (requestedEnd !== null) {
+                // Even if browser asked for less, we send a larger chunk to keep buffers full
+                end = Math.max(requestedEnd, Math.min(start + CHUNK_SIZE, totalSize - 1));
+            } else {
+                // Open ended request -> send a 15MB chunk
+                end = Math.min(start + CHUNK_SIZE, totalSize - 1);
+            }
 
             // Validate range
             if (start >= totalSize || end >= totalSize || start > end) {
                 res.setHeader('Content-Range', `bytes */${totalSize}`);
                 return res.status(416).json({ error: 'Requested range not satisfiable' });
             }
+            isPartial = true;
+        } else {
+            // Optional: even without range, start with a large chunk to optimize initial load
+            end = Math.min(start + CHUNK_SIZE, totalSize - 1);
             isPartial = true;
         }
 
@@ -244,10 +264,11 @@ router.get('/download/:hash', async (req, res) => {
         };
         const contentType = mimeMap[ext] || 'application/octet-stream';
 
-        // 5. OPTIMIZATION: DIRECT REDIRECT (Fastest for initial load)
-        // By default, we redirect to a presigned R2 URL. This allows the browser to
-        // connect directly to Cloudflare's edge, which is much faster than proxying.
-        const useProxy = req.query.proxy === 'true';
+        // 5. OPTIMIZATION: PROXIED STREAMING (Controlled Chunking)
+        // We now default to proxying with our large chunk strategy to ensure 
+        // a high delivery rate, bypassing direct redirects which can result 
+        // in inconsistent or small chunks from R2.
+        const useProxy = req.query.proxy !== 'false'; // Default to true now
 
         if (!useProxy) {
             console.log(`[DOWNLOAD] 🔀 Redirecting to direct R2 link for speed: ${file.filename}`);
@@ -289,7 +310,7 @@ router.get('/download/:hash', async (req, res) => {
             console.log(`[DOWNLOAD] 🚀 Streaming ${file.filename} (${(chunkSize / 1024 / 1024).toFixed(2)} MB)`);
         }
 
-        pipeline(r2Response.Body, res, (err) => {
+        pipeline(r2Response.Body, res, { highWaterMark: 1024 * 1024 }, (err) => {
             if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
                 console.error(`[DOWNLOAD-PIPE] ❌ Error: ${err.message}`);
             }
