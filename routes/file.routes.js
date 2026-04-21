@@ -247,6 +247,7 @@ router.get('/download/:hash', async (req, res) => {
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`);
         res.setHeader('Content-Length', totalSize);
+        res.setHeader('Accept-Ranges', 'none');
         res.setHeader('Cache-Control', 'public, max-age=3600');
 
         console.log(`[DOWNLOAD] 🚀 Streaming full file: ${file.filename} (${(totalSize / 1024 / 1024).toFixed(2)} MB)`);

@@ -2,14 +2,13 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const { FileInventory } = require('../db/models');
-const { NODE_ID, ADMIN_KEY, JWT_SECRET } = require('../config');
+const { ADMIN_KEY, JWT_SECRET } = require('../config');
 
 // ============ SIGNED URL ENDPOINT ============
 
 router.get('/', async (req, res) => {
     try {
         // 1. AUTHENTICATION CHECK
-        // This ensures only the Main Instance (which holds your ADMIN_KEY) can request URLs
         const authHeader = req.headers.authorization;
         const token = authHeader && authHeader.split(' ')[1];
 
@@ -27,44 +26,31 @@ router.get('/', async (req, res) => {
             return res.status(404).json({ error: 'File not found on this storage node' });
         }
 
-        // 3. Set Expiration (1 hour for playback)
-        const expiresIn = 3600; 
+        // 3. Set Expiration (2 hours for playback)
+        const expiresIn = 7200; 
         const expiresAt = Date.now() + (expiresIn * 1000);
 
-        // 4. Generate DIRECT R2 Signed URL (CRITICAL for speed)
-        // This bypasses the /api/download redirect and lets the browser hit R2 directly
-        console.log(`[SIGNED-URL] 🚀 Generating direct R2 link for: ${file.filename}`);
+        // 4. Generate PROXIED Download Link
+        // Instead of R2 doing the streaming, our server will now proxy the file.
+        // This ensures it's served as a standard HTTP 200 (no partial content) 
+        // to avoid the browser range-request flood.
+        console.log(`[SIGNED-URL] 🚀 Generating proxied link for: ${file.filename}`);
         
-        const { getR2Client } = require('../services/r2');
-        const { GetObjectCommand } = require('@aws-sdk/client-s3');
-        const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+        const host = req.get('host');
+        const protocol = req.protocol;
+        
+        // We sign the hash and expiration to prevent URL tampering
+        const signature = crypto.createHmac('sha256', JWT_SECRET)
+            .update(`${hash}${expiresAt}`)
+            .digest('hex');
 
-        const ext = file.filename.split('.').pop().toLowerCase();
-        const mimeMap = {
-            'mp4': 'video/mp4',
-            'mkv': 'video/x-matroska',
-            'webm': 'video/webm',
-            'avi': 'video/x-msvideo',
-            'mov': 'video/quicktime',
-            'mp3': 'audio/mpeg',
-            'wav': 'audio/wav'
-        };
-        const contentType = mimeMap[ext] || 'application/octet-stream';
-
-        const r2Client = await getR2Client(file.bucket_name);
-        const command = new GetObjectCommand({
-            Bucket: file.bucket_name,
-            Key: file.object_key,
-            ResponseContentType: contentType,
-            ResponseContentDisposition: `inline; filename="${file.filename}"`,
-            ResponseCacheControl: 'public, max-age=3600'
-        });
-
-        const directSignedUrl = await getSignedUrl(r2Client, command, { expiresIn });
+        // Construct the URL back to our /api/download route
+        // We add proxy=true to force our server to stream it directly
+        const proxiedUrl = `${protocol}://${host}/api/download/${hash}?expires=${expiresAt}&signature=${signature}&proxy=true`;
 
         res.json({
             success: true,
-            signed_url: directSignedUrl,
+            signed_url: proxiedUrl,
             expires_at: expiresAt,
             filename: file.filename,
             size: file.size
