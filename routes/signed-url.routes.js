@@ -25,10 +25,9 @@ router.get('/', async (req, res) => {
         if (!file) {
             return res.status(404).json({ error: 'File not found on this storage node' });
         }
-
-        // 3. Set Expiration (1 hour for playback)
-        const expiresIn = 3600;
-        const expiresAt = Date.now() + (expiresIn * 1000);
+        // 3. Set Expiration (Valid for 10 seconds)
+        const expiresIn = 10; // seconds
+        const expiresAt = Date.now() + (expiresIn * 1000); // Current time + 10,000ms
 
         // 4. Generate DIRECT R2 Signed URL (CRITICAL for speed)
         // This bypasses the /api/download redirect and lets the browser hit R2 directly
