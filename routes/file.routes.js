@@ -88,10 +88,11 @@ router.post('/upload', async (req, res) => {
             await r2Client.send(new PutObjectCommand({
                 Bucket: bucket.bucket_name,
                 Key: objectKey,
-                Body: fileStream, // Passing the stream instead of a buffer
+                Body: fileStream,
+                ContentLength: file.size, // CRITICAL for non-retryable streams
                 ContentType: 'application/octet-stream',
                 Metadata: {
-                    'original-filename': filename
+                    'original-filename': encodeURIComponent(filename) // Encode to prevent header errors
                 }
             }));
 
