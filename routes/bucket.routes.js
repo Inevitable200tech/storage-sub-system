@@ -108,14 +108,15 @@ router.get('/:bucket_name/test', verifyToken, async (req, res) => {
         if (!bucket) return res.status(404).json({ error: 'Bucket not found' });
 
         const { getR2Client } = require('../services/r2');
-        const { HeadBucketCommand } = require('@aws-sdk/client-s3');
+        const { ListObjectsV2Command } = require('@aws-sdk/client-s3');
         
         const client = await getR2Client(bucket_name);
         if (!client) {
             return res.status(500).json({ error: 'Failed to initialize storage client' });
         }
 
-        const command = new HeadBucketCommand({ Bucket: bucket_name });
+        // ListObjectsV2Command provides much more detailed error messages than HeadBucketCommand
+        const command = new ListObjectsV2Command({ Bucket: bucket_name, MaxKeys: 1 });
         await client.send(command);
 
         res.json({ success: true, message: 'Connection successful!' });

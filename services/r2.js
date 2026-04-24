@@ -21,6 +21,7 @@ async function getR2Client(bucketName) {
         const client = new S3Client({
             region: bucket.region || 'auto',
             endpoint: bucket.endpoint,
+            forcePathStyle: true, // CRITICAL for Tigris, MinIO, and other non-AWS endpoints
             credentials: {
                 accessKeyId: bucket.access_key_id,
                 secretAccessKey: bucket.secret_access_key
