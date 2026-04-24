@@ -101,6 +101,30 @@ router.delete('/:bucket_name', verifyToken, async (req, res) => {
     }
 });
 
+router.get('/:bucket_name/test', verifyToken, async (req, res) => {
+    try {
+        const { bucket_name } = req.params;
+        const bucket = await Bucket.findOne({ bucket_name });
+        if (!bucket) return res.status(404).json({ error: 'Bucket not found' });
+
+        const { getR2Client } = require('../services/r2');
+        const { HeadBucketCommand } = require('@aws-sdk/client-s3');
+        
+        const client = await getR2Client(bucket_name);
+        if (!client) {
+            return res.status(500).json({ error: 'Failed to initialize storage client' });
+        }
+
+        const command = new HeadBucketCommand({ Bucket: bucket_name });
+        await client.send(command);
+
+        res.json({ success: true, message: 'Connection successful!' });
+    } catch (err) {
+        console.error(`[TEST-CONNECTION] Failed for ${req.params.bucket_name}: ${err.message}`);
+        res.status(500).json({ error: `Connection failed: ${err.message}` });
+    }
+});
+
 router.post('/migrate', verifyToken, async (req, res) => {
     try {
         const { source_bucket, target_bucket } = req.body;

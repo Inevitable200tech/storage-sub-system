@@ -266,6 +266,7 @@
                         <div class="bucket-actions">
                             <button onclick="loadFiles(); switchTab('files')">Files</button>
                             <button class="secondary" onclick="updateBucketOptions('${b.bucket_name}', ${b.is_read_only}, ${b.max_storage})">Options</button>
+                            <button class="secondary" style="background: #27ae60;" onclick="testConnection('${b.bucket_name}')">Test</button>
                             <button class="danger" onclick="delBucket('${b.bucket_name}')">Delete</button>
                         </div>
                     </div>
@@ -336,6 +337,21 @@
                 e.target.reset();
                 loadBuckets();
             } catch (err) { showMessage('bucket-message', 'Error: ' + err.message, 'error'); }
+        }
+
+        async function testConnection(name) {
+            try {
+                const res = await apiCall(`/api/buckets/${name}/test`, { method: 'GET' });
+                if (!res) return;
+                const d = await res.json();
+                if (!res.ok) {
+                    alert(`Connection Failed:\n${d.error}`);
+                } else {
+                    alert(`Connection Successful!\n${d.message}`);
+                }
+            } catch (err) {
+                alert(`Error:\n${err.message}`);
+            }
         }
 
         async function updateBucketOptions(name, currentReadOnly, currentMax) {
