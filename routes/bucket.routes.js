@@ -101,6 +101,100 @@ router.delete('/:bucket_name', verifyToken, async (req, res) => {
     }
 });
 
+router.post('/migrate', verifyToken, async (req, res) => {
+    try {
+        const { source_bucket, target_bucket } = req.body;
+        if (!source_bucket || !target_bucket) {
+            return res.status(400).json({ error: 'source_bucket and target_bucket required' });
+        }
+        if (source_bucket === target_bucket) {
+            return res.status(400).json({ error: 'Source and target must be different' });
+        }
+
+        const sourceBucketInfo = await Bucket.findOne({ bucket_name: source_bucket });
+        const targetBucketInfo = await Bucket.findOne({ bucket_name: target_bucket });
+
+        if (!sourceBucketInfo || !targetBucketInfo) {
+            return res.status(404).json({ error: 'One or both buckets not found' });
+        }
+
+        if (!targetBucketInfo.is_read_only) {
+            return res.status(400).json({ error: 'Target bucket must be a read-only bucket' });
+        }
+
+        // Start migration asynchronously
+        res.json({ success: true, message: 'Migration started in the background' });
+
+        (async () => {
+            try {
+                const files = await FileInventory.find({ bucket_name: source_bucket, status: 'active' });
+                const { getR2Client } = require('../services/r2');
+                const { GetObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+                
+                const sourceClient = await getR2Client(source_bucket);
+                const targetClient = await getR2Client(target_bucket);
+
+                if (!sourceClient || !targetClient) {
+                    console.error('[MIGRATE] Failed to get R2 clients');
+                    return;
+                }
+
+                let migratedCount = 0;
+                let migratedBytes = 0;
+
+                for (const file of files) {
+                    try {
+                        console.log(`[MIGRATE] Migrating ${file.hash}...`);
+                        const getCommand = new GetObjectCommand({
+                            Bucket: source_bucket,
+                            Key: file.object_key
+                        });
+                        const response = await sourceClient.send(getCommand);
+                        
+                        const putCommand = new PutObjectCommand({
+                            Bucket: target_bucket,
+                            Key: file.object_key,
+                            Body: response.Body,
+                            ContentType: response.ContentType,
+                            ContentLength: response.ContentLength
+                        });
+                        await targetClient.send(putCommand);
+
+                        // Update DB
+                        file.bucket_name = target_bucket;
+                        await file.save();
+
+                        // Update Stats
+                        await Bucket.updateOne({ bucket_name: source_bucket }, {
+                            $inc: { storage_used: -file.size, file_count: -1 }
+                        });
+                        await Bucket.updateOne({ bucket_name: target_bucket }, {
+                            $inc: { storage_used: file.size, file_count: 1 }
+                        });
+
+                        // Delete from source
+                        const delCommand = new DeleteObjectCommand({
+                            Bucket: source_bucket,
+                            Key: file.object_key
+                        });
+                        await sourceClient.send(delCommand);
+
+                        migratedCount++;
+                        migratedBytes += file.size;
+                    } catch (err) {
+                        console.error(`[MIGRATE] Error migrating file ${file.hash}: ${err.message}`);
+                    }
+                }
+                console.log(`[MIGRATE] Finished migrating ${migratedCount} files (${migratedBytes} bytes) from ${source_bucket} to ${target_bucket}`);
+            } catch (err) {
+                console.error(`[MIGRATE] Background task error: ${err.message}`);
+            }
+        })();
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 router.get('/:bucket_name/files', async (req, res) => {
     try {
         const { bucket_name } = req.params;
