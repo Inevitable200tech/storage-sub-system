@@ -10,6 +10,7 @@ const bucketSchema = new mongoose.Schema({
     endpoint: String,
     region: { type: String, default: 'auto' },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+    is_read_only: { type: Boolean, default: false },
     storage_used: { type: Number, default: 0 },
     file_count: { type: Number, default: 0 },
     max_storage: { type: Number, default: MAX_BUCKET_SIZE },

@@ -120,6 +120,13 @@
                         <div class="form-group"><label>Secret Key</label><input type="password" id="secret-access-key" required></div>
                         <div class="form-group"><label>Region</label><input type="text" id="bucket-region" placeholder="auto"></div>
                     </div>
+                    <div class="form-row three">
+                        <div class="form-group"><label>Max Storage (GB)</label><input type="number" id="bucket-max-storage" placeholder="10"></div>
+                        <div class="form-group" style="display: flex; align-items: center; gap: 10px; padding-top: 25px;">
+                            <input type="checkbox" id="bucket-is-read-only" style="width: auto;">
+                            <label style="margin-bottom: 0;">Read Only</label>
+                        </div>
+                    </div>
                     <button type="submit">Add Bucket</button>
                 </form>
             </div>
@@ -201,7 +208,10 @@
                 
                 const html = s.buckets.map(b => `
                     <tr>
-                        <td><strong>${b.bucket_name}</strong></td>
+                        <td>
+                            <strong>${b.bucket_name}</strong>
+                            ${b.is_read_only ? '<span class="bucket-status" style="background: #e9ecef; color: #495057; font-size: 10px; padding: 2px 4px; margin-left: 5px;">READ ONLY</span>' : ''}
+                        </td>
                         <td><span class="bucket-status ${b.type === 'thumbnail' ? 'thumb' : ''}">${b.type}</span></td>
                         <td>${b.file_count}</td>
                         <td>${formatBytes(b.storage_used)} / ${formatBytes(b.max_storage)}</td>
@@ -218,7 +228,10 @@
                 const d = await res.json();
                 const html = d.buckets.map(b => `
                     <div class="bucket-card">
-                        <h3>${b.bucket_name}</h3>
+                        <h3>
+                            ${b.bucket_name}
+                            ${b.is_read_only ? '<span style="font-size: 10px; background: #eee; padding: 2px 5px; border-radius: 3px; vertical-align: middle;">READ ONLY</span>' : ''}
+                        </h3>
                         <span class="bucket-status ${b.type === 'thumbnail' ? 'thumb' : ''}">${b.status} (${b.type})</span>
                         <div class="bucket-info"><strong>Account:</strong> ${b.account_id}</div>
                         <div class="bucket-info"><strong>Files:</strong> ${b.file_count}</div>
@@ -226,6 +239,7 @@
                         <div class="progress-bar"><div class="progress-fill" style="width: ${((b.storage_used / b.max_storage) * 100).toFixed(2)}%">${((b.storage_used / b.max_storage) * 100).toFixed(1)}%</div></div>
                         <div class="bucket-actions">
                             <button onclick="loadFiles(); switchTab('files')">Files</button>
+                            <button class="secondary" onclick="updateBucketOptions('${b.bucket_name}', ${b.is_read_only}, ${b.max_storage})">Options</button>
                             <button class="danger" onclick="delBucket('${b.bucket_name}')">Delete</button>
                         </div>
                     </div>
@@ -283,7 +297,9 @@
                 access_key_id: document.getElementById('access-key-id').value,
                 secret_access_key: document.getElementById('secret-access-key').value,
                 type: document.getElementById('bucket-type').value,
-                region: document.getElementById('bucket-region').value
+                region: document.getElementById('bucket-region').value,
+                max_storage: document.getElementById('bucket-max-storage').value ? (parseInt(document.getElementById('bucket-max-storage').value) * 1024 * 1024 * 1024) : undefined,
+                is_read_only: document.getElementById('bucket-is-read-only').checked
             };
             try {
                 const res = await apiCall('/api/buckets', { method: 'POST', body: JSON.stringify(data) });
@@ -293,6 +309,28 @@
                 showMessage('bucket-message', 'Added!', 'success');
                 e.target.reset();
                 loadBuckets();
+            } catch (err) { showMessage('bucket-message', 'Error: ' + err.message, 'error'); }
+        }
+
+        async function updateBucketOptions(name, currentReadOnly, currentMax) {
+            const newReadOnly = confirm(`Mark ${name} as ${currentReadOnly ? 'Read/Write' : 'Read Only'}?`) ? !currentReadOnly : currentReadOnly;
+            const newMaxGB = prompt(`Update Max Storage for ${name} (in GB):`, (currentMax / 1024 / 1024 / 1024).toFixed(0));
+            
+            if (newReadOnly === currentReadOnly && (!newMaxGB || parseInt(newMaxGB) === (currentMax / 1024 / 1024 / 1024))) return;
+
+            const data = {
+                is_read_only: newReadOnly,
+                max_storage: newMaxGB ? (parseInt(newMaxGB) * 1024 * 1024 * 1024) : undefined
+            };
+
+            try {
+                const res = await apiCall(`/api/buckets/${name}`, { method: 'PATCH', body: JSON.stringify(data) });
+                if (!res) return;
+                const d = await res.json();
+                if (!res.ok) { showMessage('bucket-message', d.error, 'error'); return; }
+                showMessage('bucket-message', 'Updated!', 'success');
+                loadBuckets();
+                loadStatus();
             } catch (err) { showMessage('bucket-message', 'Error: ' + err.message, 'error'); }
         }
 

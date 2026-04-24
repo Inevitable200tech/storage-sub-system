@@ -6,7 +6,7 @@ function hashFile(data) {
 }
 
 async function getAvailableBucket(type = 'video') {
-    const query = { status: 'active' };
+    const query = { status: 'active', is_read_only: { $ne: true } };
     if (type === 'video') {
         query.$or = [{ type: 'video' }, { type: { $exists: false } }];
     } else {
@@ -45,6 +45,8 @@ async function getTotalStats() {
         bucketStats.push({
             bucket_name: bucket.bucket_name,
             type: bucket.type || 'video',
+            status: bucket.status,
+            is_read_only: bucket.is_read_only || false,
             storage_used: bucket.storage_used,
             max_storage: bucket.max_storage,
             free_space: bucket.max_storage - bucket.storage_used,

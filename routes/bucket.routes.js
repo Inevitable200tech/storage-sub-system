@@ -18,7 +18,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', verifyToken, async (req, res) => {
     try {
-        const { bucket_name, account_id, access_key_id, secret_access_key, endpoint, type, region } = req.body;
+        const { bucket_name, account_id, access_key_id, secret_access_key, endpoint, type, region, max_storage, is_read_only } = req.body;
 
         if (!bucket_name || (!account_id && !endpoint) || !access_key_id || !secret_access_key) {
             return res.status(400).json({ error: 'Missing required fields (bucket_name, access_key, secret_key, and either account_id or endpoint)' });
@@ -40,7 +40,9 @@ router.post('/', verifyToken, async (req, res) => {
             type: type || 'video',
             region: region || 'auto',
             endpoint: endpoint || (account_id && account_id.includes('r2') ? `https://${account_id}.r2.cloudflarestorage.com` : endpoint),
-            status: 'active'
+            status: 'active',
+            max_storage: max_storage || undefined,
+            is_read_only: is_read_only || false
         });
 
         await newBucket.save();
@@ -49,6 +51,32 @@ router.post('/', verifyToken, async (req, res) => {
         r2Clients.clear();
         
         res.status(201).json({ success: true, bucket: newBucket });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.patch('/:bucket_name', verifyToken, async (req, res) => {
+    try {
+        const { bucket_name } = req.params;
+        const { status, is_read_only, max_storage, type } = req.body;
+
+        const bucket = await Bucket.findOne({ bucket_name });
+        if (!bucket) return res.status(404).json({ error: 'Bucket not found' });
+
+        const updates = {};
+        if (status !== undefined) updates.status = status;
+        if (is_read_only !== undefined) updates.is_read_only = is_read_only;
+        if (max_storage !== undefined) updates.max_storage = max_storage;
+        if (type !== undefined) updates.type = type;
+
+        const updatedBucket = await Bucket.findOneAndUpdate(
+            { bucket_name },
+            { $set: updates },
+            { new: true }
+        );
+
+        res.json({ success: true, bucket: updatedBucket });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
