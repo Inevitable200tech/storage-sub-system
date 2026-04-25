@@ -39,8 +39,10 @@ async function getTotalStats() {
     const bucketStats = [];
 
     for (const bucket of buckets) {
-        totalUsed += bucket.storage_used;
-        totalMax += bucket.max_storage;
+        if (!bucket.is_read_only && bucket.type !== 'thumbnail') {
+            totalUsed += (bucket.storage_used || 0);
+            totalMax += (bucket.max_storage || 0);
+        }
         
         bucketStats.push({
             bucket_name: bucket.bucket_name,
@@ -51,7 +53,7 @@ async function getTotalStats() {
             max_storage: bucket.max_storage,
             free_space: bucket.max_storage - bucket.storage_used,
             file_count: bucket.file_count,
-            percentage_used: ((bucket.storage_used / bucket.max_storage) * 100).toFixed(2)
+            percentage_used: bucket.max_storage ? ((bucket.storage_used / bucket.max_storage) * 100).toFixed(2) : "0.00"
         });
     }
 
@@ -61,7 +63,7 @@ async function getTotalStats() {
         total_max_storage: totalMax,
         total_free_space: totalMax - totalUsed,
         total_files: totalFiles,
-        percentage_used: ((totalUsed / totalMax) * 100).toFixed(2),
+        percentage_used: totalMax > 0 ? ((totalUsed / totalMax) * 100).toFixed(2) : "0.00",
         buckets: bucketStats
     };
 }
