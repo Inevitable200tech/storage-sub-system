@@ -26,7 +26,7 @@ router.get('/', async (req, res) => {
             return res.status(404).json({ error: 'File not found on this storage node' });
         }
         // 3. Set Expiration (Valid for 10 seconds)
-        const expiresIn = 10; // seconds
+        const expiresIn = 20; // seconds
         const expiresAt = Date.now() + (expiresIn * 1000); // Current time + 10,000ms
 
         // 4. Generate DIRECT R2 Signed URL (CRITICAL for speed)
