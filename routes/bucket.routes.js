@@ -143,8 +143,8 @@ router.post('/migrate', verifyToken, async (req, res) => {
             return res.status(404).json({ error: 'One or both buckets not found' });
         }
 
-        if (!targetBucketInfo.is_read_only) {
-            return res.status(400).json({ error: 'Target bucket must be a read-only bucket' });
+        if (!sourceBucketInfo.is_read_only) {
+            return res.status(400).json({ error: 'Source bucket must be read-only' });
         }
 
         // Start migration asynchronously
