@@ -172,17 +172,21 @@
 
     <script>
         const token = localStorage.getItem('token');
+        console.log(`[DASHBOARD] Page loaded. Token present: ${!!token}`);
 
         if (!token) {
+            console.log(`[DASHBOARD] No token found, redirecting to login`);
             window.location.href = '/';
         }
 
         function logout() {
+            console.log(`[DASHBOARD] Logout clicked, clearing token`);
             localStorage.removeItem('token');
             window.location.href = '/';
         }
 
         function switchTab(tab) {
+            console.log(`[DASHBOARD] Switching to tab: ${tab}`);
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
             document.getElementById(tab).classList.add('active');
@@ -211,8 +215,11 @@
 
         async function apiCall(url, opts = {}) {
             const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...opts.headers };
+            console.log(`[API-CALL] ${opts.method || 'GET'} ${url}`, { headers: headers.Authorization ? 'Bearer [token]' : 'none' });
             const res = await fetch(url, { ...opts, headers });
+            console.log(`[API-CALL] Response: ${res.status} ${res.statusText}`);
             if (res.status === 401 || res.status === 403) {
+                console.error(`[AUTH-ERROR] Got ${res.status}, logging out`);
                 localStorage.removeItem('token');
                 window.location.href = '/';
                 return null;
@@ -222,9 +229,14 @@
 
         async function loadStatus() {
             try {
+                console.log(`[STATUS] Loading status...`);
                 const res = await fetch('/api/status');
                 const d = await res.json();
-                if (!d.success) return;
+                if (!d.success) {
+                    console.warn(`[STATUS] Response was not successful:`, d);
+                    return;
+                }
+                console.log(`[STATUS] Status loaded successfully`);
                 const s = d.stats;
                 document.getElementById('node-info').textContent = `Node: ${d.node_id}`;
                 document.getElementById('stat-total-buckets').textContent = s.total_buckets;
@@ -245,7 +257,9 @@
                     </tr>
                 `).join('');
                 document.getElementById('bucket-stats').innerHTML = html || '<tr><td colspan="5">No buckets</td></tr>';
-            } catch (e) { console.error(e); }
+            } catch (e) { 
+                console.error(`[STATUS] Error loading status:`, e);
+            }
         }
 
         async function loadBuckets() {
@@ -390,8 +404,10 @@
 
         async function loadMigrationOptions() {
             try {
+                console.log(`[MIGRATION-OPTIONS] Loading buckets for migration`);
                 const res = await fetch('/api/buckets');
                 const d = await res.json();
+                console.log(`[MIGRATION-OPTIONS] Fetched buckets:`, d.buckets.map(b => ({ name: b.bucket_name, readonly: b.is_read_only })));
                 
                 const sourceSelect = document.getElementById('source-bucket');
                 const targetSelect = document.getElementById('target-bucket');
@@ -399,13 +415,22 @@
                 sourceSelect.innerHTML = '<option value="">Select read-only source bucket...</option>';
                 targetSelect.innerHTML = '<option value="">Select target bucket...</option>';
 
+                let readOnlyCount = 0;
+                let totalCount = 0;
+
                 d.buckets.forEach(b => {
+                    totalCount++;
                     if (b.is_read_only) {
+                        readOnlyCount++;
                         sourceSelect.innerHTML += `<option value="${b.bucket_name}">${b.bucket_name} (${formatBytes(b.storage_used)} used)</option>`;
                     }
                     targetSelect.innerHTML += `<option value="${b.bucket_name}">${b.bucket_name} (${formatBytes(b.max_storage - b.storage_used)} free)</option>`;
                 });
-            } catch (e) { console.error(e); }
+                
+                console.log(`[MIGRATION-OPTIONS] Loaded ${totalCount} total buckets, ${readOnlyCount} are read-only`);
+            } catch (e) { 
+                console.error(`[MIGRATION-OPTIONS] Error loading options:`, e);
+            }
         }
 
         async function migrateFiles(e) {
@@ -413,31 +438,52 @@
             const source = document.getElementById('source-bucket').value;
             const target = document.getElementById('target-bucket').value;
 
+            console.log(`[MIGRATE] Starting migration from ${source} to ${target}`);
+
             if (source === target) {
+                console.warn(`[MIGRATE] Source and target are the same`);
                 showMessage('migration-message', 'Source and target must be different!', 'error');
                 return;
             }
 
-            if (!confirm(`Are you sure you want to migrate all files from ${source} to ${target}? This action cannot be undone and will run in the background.`)) return;
+            const confirmMsg = `Are you sure you want to migrate all files from ${source} to ${target}? This action cannot be undone and will run in the background.`;
+            console.log(`[MIGRATE] Showing confirmation dialog`);
+            if (!confirm(confirmMsg)) {
+                console.log(`[MIGRATE] User cancelled migration`);
+                return;
+            }
 
+            console.log(`[MIGRATE] User confirmed, proceeding with API call`);
             try {
+                const payload = { source_bucket: source, target_bucket: target };
+                console.log(`[MIGRATE] Sending payload:`, payload);
+                
                 const res = await apiCall('/api/buckets/migrate', {
                     method: 'POST',
-                    body: JSON.stringify({ source_bucket: source, target_bucket: target })
+                    body: JSON.stringify(payload)
                 });
                 
-                if (!res) return;
+                console.log(`[MIGRATE] API call returned:`, res);
+                if (!res) {
+                    console.error(`[MIGRATE] Got null response (likely 401/403)`);
+                    return;
+                }
+                
                 const d = await res.json();
+                console.log(`[MIGRATE] Response body:`, d);
                 
                 if (!res.ok) {
+                    console.error(`[MIGRATE] API returned error: ${d.error}`);
                     showMessage('migration-message', d.error, 'error');
                     return;
                 }
                 
+                console.log(`[MIGRATE] Migration started successfully`);
                 showMessage('migration-message', 'Migration started in background. Check status later.', 'success');
                 e.target.reset();
                 
             } catch (err) {
+                console.error(`[MIGRATE] Exception caught:`, err);
                 showMessage('migration-message', 'Error: ' + err.message, 'error');
             }
         }
@@ -458,7 +504,11 @@
         }
 
         loadStatus();
-        setInterval(loadStatus, 5000);
+        console.log(`[DASHBOARD] Initial status loaded, setting up 5-second interval`);
+        setInterval(() => {
+            console.log(`[DASHBOARD] Status interval tick`);
+            loadStatus();
+        }, 5000);
     </script>
 </body>
 </html>
