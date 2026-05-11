@@ -152,15 +152,15 @@
                 <form onsubmit="migrateFiles(event)">
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Source Bucket (Any)</label>
+                            <label>Source Bucket (Read-Only)</label>
                             <select id="source-bucket" required>
-                                <option value="">Select source bucket...</option>
+                                <option value="">Select read-only source bucket...</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label>Target Bucket (Read-Only)</label>
+                            <label>Target Bucket (Any)</label>
                             <select id="target-bucket" required>
-                                <option value="">Select read-only target bucket...</option>
+                                <option value="">Select target bucket...</option>
                             </select>
                         </div>
                     </div>
@@ -396,14 +396,14 @@
                 const sourceSelect = document.getElementById('source-bucket');
                 const targetSelect = document.getElementById('target-bucket');
                 
-                sourceSelect.innerHTML = '<option value="">Select source bucket...</option>';
-                targetSelect.innerHTML = '<option value="">Select read-only target bucket...</option>';
+                sourceSelect.innerHTML = '<option value="">Select read-only source bucket...</option>';
+                targetSelect.innerHTML = '<option value="">Select target bucket...</option>';
 
                 d.buckets.forEach(b => {
-                    sourceSelect.innerHTML += `<option value="${b.bucket_name}">${b.bucket_name} (${formatBytes(b.storage_used)} used)</option>`;
                     if (b.is_read_only) {
-                        targetSelect.innerHTML += `<option value="${b.bucket_name}">${b.bucket_name} (${formatBytes(b.max_storage - b.storage_used)} free)</option>`;
+                        sourceSelect.innerHTML += `<option value="${b.bucket_name}">${b.bucket_name} (${formatBytes(b.storage_used)} used)</option>`;
                     }
+                    targetSelect.innerHTML += `<option value="${b.bucket_name}">${b.bucket_name} (${formatBytes(b.max_storage - b.storage_used)} free)</option>`;
                 });
             } catch (e) { console.error(e); }
         }
